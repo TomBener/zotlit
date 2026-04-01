@@ -15,10 +15,11 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "tsc --noEmit",
     "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
     "test": "tsx --test src/**/*.test.ts",
-    "check": "tsc --noEmit && npm test"
+    "check": "npm run lint && npm test"
   },
   "dependencies": {
     "@opendataloader/pdf": "^2.2.0",
