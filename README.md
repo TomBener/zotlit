@@ -144,4 +144,4 @@ zotlit expand --file "~/Library/.../paper.pdf" --block-start 10 --radius 2
 
 ## License
 
-No license file is currently included in this repository.
+MIT. See [LICENSE](./LICENSE).
