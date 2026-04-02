@@ -20,6 +20,7 @@ Main commands:
 
 - `sync`: build or refresh the local index
 - `search`: search indexed PDFs
+- `metadata`: search bibliography metadata
 - `read` / `expand`: read blocks and local context after a hit
 
 It does not currently:
@@ -125,6 +126,7 @@ zotlit sync [--attachments-root <path>]
 zotlit status
 zotlit version
 zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank | --no-rerank]
+zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
 zotlit read (--file <path> | --item-key <key>) [--offset-block <n>] [--limit-blocks <n>]
 zotlit expand --file <path> --block-start <n> [--block-end <n>] [--radius <n>]
 ```
@@ -293,7 +295,56 @@ The most important fields in a `search` result are:
 - `score`
   qmd score plus a small amount of `zotlit` post-processing
 
-### 4. `read`
+### 4. `metadata`
+
+`metadata` searches Zotero bibliography metadata directly from `bibliography.json`.
+
+```bash
+zotlit metadata "American Journal of Political Science"
+zotlit metadata "Kenneth Benoit" --field author
+zotlit metadata "large language models" --field title --field abstract
+zotlit metadata "political economy" --has-pdf
+```
+
+Notes:
+
+- metadata search text is positional; `--query` is not supported
+- `metadata` does not require `sync`
+- `metadata` returns up to 20 results by default; use `--limit` to change that
+- `--field` can be repeated and supports `title`, `author`, `year`, `abstract`, `journal`, and `publisher`
+- `journal` only applies to journal-like item types
+- `publisher` only applies to `book` and `chapter`
+- `--has-pdf` keeps only records with at least one supported PDF attachment path
+
+Example output:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "results": [
+      {
+        "itemKey": "YTSBBC7P",
+        "citationKey": "benoit2026ull",
+        "type": "article-journal",
+        "title": "Using large language models to analyze political texts through natural language understanding",
+        "authors": ["Benoit Kenneth"],
+        "year": "2026",
+        "abstract": "Abstract ... We conclude with a discussion of the profound implications of modern LLMs for political text analysis.",
+        "hasSupportedPdf": true,
+        "supportedPdfFiles": [
+          "~/Library/Mobile Documents/com~apple~CloudDocs/Zotero/AI/journalArticle/Benoit - 2026 - Using large language models to analyze political texts through natural language understanding.pdf"
+        ],
+        "matchedFields": ["journal"],
+        "score": 4,
+        "journal": "American Journal of Political Science"
+      }
+    ]
+  }
+}
+```
+
+### 5. `read`
 
 `read` does not use qmd. It reads blocks directly from the local manifest.
 
@@ -330,7 +381,7 @@ Example output:
 }
 ```
 
-### 5. `expand`
+### 6. `expand`
 
 `expand` returns local context around a hit or a known block range. It also does not depend on qmd.
 

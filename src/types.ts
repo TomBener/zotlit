@@ -13,10 +13,15 @@ export interface BibliographyRecord {
   citationKey?: string;
   title: string;
   authors: string[];
+  authorSearchTexts: string[];
   year?: string;
   abstract?: string;
+  journal?: string;
+  publisher?: string;
   type?: string;
   attachmentPaths: string[];
+  supportedPdfFiles: string[];
+  hasSupportedPdf: boolean;
 }
 
 export interface AttachmentCatalogEntry {
@@ -119,6 +124,24 @@ export interface SearchResultRow {
   blockStart: number;
   blockEnd: number;
   score: number;
+}
+
+export type MetadataField = "title" | "author" | "year" | "abstract" | "journal" | "publisher";
+
+export interface MetadataSearchResultRow {
+  itemKey: string;
+  citationKey?: string;
+  type?: string;
+  title: string;
+  authors: string[];
+  year?: string;
+  abstract?: string;
+  hasSupportedPdf: boolean;
+  supportedPdfFiles: string[];
+  matchedFields: MetadataField[];
+  score: number;
+  journal?: string;
+  publisher?: string;
 }
 
 export interface ReadBlock {

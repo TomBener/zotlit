@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
 const expectedVersion = JSON.parse(
@@ -29,9 +31,15 @@ test("help summarizes current commands and keeps config-only overrides out of th
   assert.match(result.stdout, /zotlit sync \[--attachments-root <path>\]/);
   assert.match(result.stdout, /zotlit version/);
   assert.match(result.stdout, /zotlit search "<text>" \[--exact\] \[--limit <n>\]/);
+  assert.match(result.stdout, /zotlit metadata "<text>" \[--limit <n>\] \[--field <field>\] \[--has-pdf\]/);
   assert.match(result.stdout, /Options:/);
   assert.match(result.stdout, /--version\s+Print the current zotlit version\./);
-  assert.match(result.stdout, /--limit <n>\s+Return up to n search results\. Default: 10\./);
+  assert.match(
+    result.stdout,
+    /--limit <n>\s+Return up to n search results\. Default: 10 for search, 20 for metadata\./,
+  );
+  assert.match(result.stdout, /--field <field>\s+Limit metadata search/);
+  assert.match(result.stdout, /--has-pdf\s+Keep only metadata results/);
   assert.match(result.stdout, /expand currently requires --file\./);
   assert.match(result.stdout, /Paths and other defaults are read from \~\/\.zotlit\/config\.json\./);
   assert.doesNotMatch(result.stdout, /--bibliography <path>/);
@@ -76,4 +84,77 @@ test("search rejects combining exact mode with rerank", () => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /"code": "UNEXPECTED_ARGUMENT"/);
   assert.match(result.stdout, /`--exact` cannot be combined with `--rerank`/);
+});
+
+test("metadata rejects removed query flag and points to positional usage", () => {
+  const result = runCli(["metadata", "--query", "aging in China"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /"code": "UNEXPECTED_ARGUMENT"/);
+  assert.match(result.stdout, /`--query` is not supported/);
+  assert.match(result.stdout, /zotlit metadata .*<text>.*/);
+});
+
+test("metadata rejects search-only flags", () => {
+  const result = runCli(["metadata", "--exact", "aging in China"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /"code": "UNEXPECTED_ARGUMENT"/);
+  assert.match(result.stdout, /metadata only supports --limit, --field, and --has-pdf/);
+});
+
+test("metadata accumulates repeated field filters", () => {
+  const root = mkdtempSync(join(tmpdir(), "zotlit-cli-metadata-"));
+  const attachmentsRoot = join(root, "attachments");
+  mkdirSync(attachmentsRoot, { recursive: true });
+  const bibliographyPath = join(root, "bibliography.json");
+  writeFileSync(
+    bibliographyPath,
+    JSON.stringify([
+      {
+        title: "Needle in title",
+        author: [{ family: "Smith", given: "Jane" }],
+        issued: { "date-parts": [[2024]] },
+        type: "book",
+        "zotero-item-key": "ITEM1",
+      },
+      {
+        title: "Other title",
+        abstract: "Needle in abstract",
+        author: [{ family: "Doe", given: "John" }],
+        issued: { "date-parts": [[2023]] },
+        type: "book",
+        "zotero-item-key": "ITEM2",
+      },
+    ]),
+    "utf-8",
+  );
+
+  const result = runCli([
+    "metadata",
+    "needle",
+    "--field",
+    "title",
+    "--field",
+    "abstract",
+    "--bibliography",
+    bibliographyPath,
+    "--attachments-root",
+    attachmentsRoot,
+    "--data-dir",
+    join(root, "data"),
+  ]);
+
+  assert.equal(result.status, 0);
+  const parsed = JSON.parse(result.stdout) as {
+    ok: boolean;
+    data: {
+      results: Array<{ itemKey: string }>;
+    };
+  };
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(
+    parsed.data.results.map((row) => row.itemKey),
+    ["ITEM1", "ITEM2"],
+  );
 });

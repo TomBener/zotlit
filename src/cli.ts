@@ -3,19 +3,22 @@
 import { getDataPaths, resolveConfig, type ConfigOverrides } from "./config.js";
 import { expandDocument, getIndexStatus, readDocument, searchLiterature } from "./engine.js";
 import { emitError, emitOk } from "./json.js";
+import { searchMetadata } from "./metadata.js";
 import { openQmdClient } from "./qmd.js";
 import { runSync } from "./sync.js";
+import type { MetadataField } from "./types.js";
 import { compactHomePath } from "./utils.js";
 import { readFileSync } from "node:fs";
 
-type FlagValue = string | boolean;
+type FlagValue = string | string[] | boolean;
 
 interface ParsedArgs {
   positionals: string[];
   flags: Record<string, FlagValue>;
 }
 
-const BOOLEAN_FLAGS = new Set(["exact", "help", "no-rerank", "rerank", "version"]);
+const BOOLEAN_FLAGS = new Set(["exact", "has-pdf", "help", "no-rerank", "rerank", "version"]);
+const METADATA_FIELDS: MetadataField[] = ["title", "author", "year", "abstract", "journal", "publisher"];
 
 function getCliVersion(): string {
   const packageJsonPath = new URL("../package.json", import.meta.url);
@@ -26,6 +29,24 @@ function getCliVersion(): string {
 function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags: Record<string, FlagValue> = {};
+
+  const assignFlag = (key: string, value: string | boolean): void => {
+    const existing = flags[key];
+    if (typeof value === "boolean") {
+      flags[key] = value;
+      return;
+    }
+    if (existing === undefined || typeof existing === "boolean") {
+      flags[key] = value;
+      return;
+    }
+    if (typeof existing === "string") {
+      flags[key] = [existing, value];
+      return;
+    }
+    flags[key] = [...existing, value];
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (!token.startsWith("--")) {
@@ -35,19 +56,19 @@ function parseArgs(argv: string[]): ParsedArgs {
     const trimmed = token.slice(2);
     const eqIndex = trimmed.indexOf("=");
     if (eqIndex >= 0) {
-      flags[trimmed.slice(0, eqIndex)] = trimmed.slice(eqIndex + 1);
+      assignFlag(trimmed.slice(0, eqIndex), trimmed.slice(eqIndex + 1));
       continue;
     }
     if (BOOLEAN_FLAGS.has(trimmed)) {
-      flags[trimmed] = true;
+      assignFlag(trimmed, true);
       continue;
     }
     const next = argv[i + 1];
     if (!next || next.startsWith("--")) {
-      flags[trimmed] = true;
+      assignFlag(trimmed, true);
       continue;
     }
-    flags[trimmed] = next;
+    assignFlag(trimmed, next);
     i++;
   }
   return { positionals, flags };
@@ -57,8 +78,23 @@ function getStringFlag(flags: Record<string, FlagValue>, ...keys: string[]): str
   for (const key of keys) {
     const value = flags[key];
     if (typeof value === "string" && value.length > 0) return value;
+    if (Array.isArray(value)) {
+      const last = value[value.length - 1];
+      if (typeof last === "string" && last.length > 0) return last;
+    }
   }
   return undefined;
+}
+
+function getStringListFlag(flags: Record<string, FlagValue>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = flags[key];
+    if (typeof value === "string" && value.length > 0) return [value];
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    }
+  }
+  return [];
 }
 
 function getNumberFlag(flags: Record<string, FlagValue>, ...keys: string[]): number | undefined {
@@ -88,13 +124,14 @@ function overridesFromFlags(flags: Record<string, FlagValue>): ConfigOverrides {
 function printHelp(): void {
   console.log(`zotlit
 
-Search indexed Zotero PDFs and follow hits with read or expand.
+Search indexed Zotero PDFs or bibliography metadata and follow PDF hits with read or expand.
 
 Usage:
   zotlit sync [--attachments-root <path>]
   zotlit status
   zotlit version
   zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank|--no-rerank]
+  zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
   zotlit read (--file <path> | --item-key <key>) [--offset-block <n>] [--limit-blocks <n>]
   zotlit expand --file <path> --block-start <n> [--block-end <n>] [--radius <n>]
 
@@ -115,6 +152,11 @@ Commands:
     --rerank / --no-rerank override qmd's default rerank behavior.
     --exact cannot be combined with --rerank.
 
+  metadata
+    Search Zotero bibliography metadata from bibliography.json.
+    --field can be repeated and supports: title, author, year, abstract, journal, publisher.
+    --has-pdf keeps only results with a supported PDF attachment path.
+
   read
     Read blocks directly from a local manifest.
     Use either --file or --item-key.
@@ -126,10 +168,12 @@ Commands:
 Options:
   --attachments-root <path>   Limit sync to a Zotero subfolder.
   --exact                     Use Tantivy-based lexical search for search.
-  --limit <n>                 Return up to n search results. Default: 10.
+  --limit <n>                 Return up to n search results. Default: 10 for search, 20 for metadata.
   --min-score <n>             Drop lower-scoring search hits before mapping.
   --rerank                    Force reranking for search.
   --no-rerank                 Skip reranking for search.
+  --field <field>             Limit metadata search to title, author, year, abstract, journal, or publisher.
+  --has-pdf                   Keep only metadata results with a supported PDF attachment path.
   --offset-block <n>          Start reading at block n. Default: 0.
   --limit-blocks <n>          Read up to n blocks. Default: 20.
   --block-start <n>           Start block for expand.
@@ -140,6 +184,7 @@ Options:
 Examples:
   zotlit search "dangwei shuji" --exact
   zotlit search "state-owned enterprise governance" --limit 5 --min-score 0.4
+  zotlit metadata "American Journal of Political Science" --field journal
   zotlit expand --file "~/Library/.../paper.pdf" --block-start 10 --radius 2
   zotlit read --item-key KG326EEI
   zotlit status
@@ -250,6 +295,55 @@ async function main(): Promise<void> {
           ...(minScore !== undefined ? { minScore } : {}),
         });
         emitOk(data);
+        return;
+      }
+
+      case "metadata": {
+        if ("query" in parsed.flags) {
+          emitError("UNEXPECTED_ARGUMENT", '`--query` is not supported. Use: zotlit metadata "<text>"');
+          return;
+        }
+        const invalidFlags = ["exact", "rerank", "no-rerank", "min-score"].filter(
+          (flag) => flag in parsed.flags,
+        );
+        if (invalidFlags.length > 0) {
+          emitError(
+            "UNEXPECTED_ARGUMENT",
+            `metadata only supports --limit, --field, and --has-pdf. Remove: ${invalidFlags
+              .map((flag) => `--${flag}`)
+              .join(", ")}`,
+          );
+          return;
+        }
+        if (parsed.flags.field === true) {
+          emitError(
+            "INVALID_ARGUMENT",
+            `\`--field\` requires a value. Use one or more of: ${METADATA_FIELDS.join(", ")}.`,
+          );
+          return;
+        }
+        const query = parsed.positionals.slice(1).join(" ");
+        if (!query) {
+          emitError("MISSING_ARGUMENT", 'Missing metadata search text. Use: zotlit metadata "<text>"');
+          return;
+        }
+        const requestedFields = [...new Set(getStringListFlag(parsed.flags, "field"))];
+        const invalidFields = requestedFields.filter(
+          (field): field is string => !METADATA_FIELDS.includes(field as MetadataField),
+        );
+        if (invalidFields.length > 0) {
+          emitError(
+            "INVALID_ARGUMENT",
+            `Unsupported metadata field: ${invalidFields.join(", ")}. Use one or more of: ${METADATA_FIELDS.join(", ")}.`,
+          );
+          return;
+        }
+        const limit = getNumberFlag(parsed.flags, "limit") || 20;
+        const data = await searchMetadata(query, limit, overrides, {
+          ...(requestedFields.length > 0 ? { fields: requestedFields as MetadataField[] } : {}),
+          ...(getBooleanFlag(parsed.flags, "has-pdf") ? { hasPdf: true } : {}),
+        });
+        emitOk(data, { elapsedMs: Date.now() - startedAt });
         return;
       }
 

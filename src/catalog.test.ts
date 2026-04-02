@@ -24,7 +24,9 @@ test("loadCatalog keeps attachments inside root and marks only pdf as supported"
         title: "Paper",
         author: [{ family: "Smith", given: "Jane" }],
         issued: { "date-parts": [[2024]] },
+        "container-title": "Journal of Testing",
         file: `${pdfPath};${epubPath};/tmp/outside.pdf`,
+        type: "article-journal",
         "zotero-item-key": "ITEM1",
       },
     ]),
@@ -39,6 +41,10 @@ test("loadCatalog keeps attachments inside root and marks only pdf as supported"
   });
 
   assert.equal(catalog.records.length, 1);
+  assert.deepEqual(catalog.records[0]?.authorSearchTexts, ["Smith Jane", "Jane Smith"]);
+  assert.equal(catalog.records[0]?.journal, "Journal of Testing");
+  assert.deepEqual(catalog.records[0]?.supportedPdfFiles, [pdfPath]);
+  assert.equal(catalog.records[0]?.hasSupportedPdf, true);
   assert.equal(catalog.attachments.length, 2);
   assert.equal(catalog.attachments[0]!.supported, false);
   assert.equal(catalog.attachments[0]!.fileExt, "epub");
