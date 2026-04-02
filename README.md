@@ -1,5 +1,8 @@
 # zotlit
 
+[![Lint](https://github.com/TomBener/zotlit/actions/workflows/lint.yml/badge.svg)](https://github.com/TomBener/zotlit/actions/workflows/lint.yml)
+[![Release](https://github.com/TomBener/zotlit/actions/workflows/release.yml/badge.svg)](https://github.com/TomBener/zotlit/actions/workflows/release.yml)
+
 `zotlit` is a Zotero literature search CLI for AI agents.
 
 It uses:
@@ -32,7 +35,9 @@ It does not currently:
 - [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf)
   for PDF extraction into Markdown and structured JSON
 - [qmd](https://github.com/tobi/qmd)
-  for local indexing and search
+  for default semantic search
+- [Tantivy](https://github.com/quickwit-oss/tantivy)
+  for lexical exact search
 
 High-level flow:
 
