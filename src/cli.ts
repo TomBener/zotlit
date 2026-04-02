@@ -121,6 +121,7 @@ function overridesFromFlags(flags: Record<string, FlagValue>): ConfigOverrides {
     semanticScholarApiKey: getStringFlag(flags, "semantic-scholar-api-key"),
     zoteroLibraryId: getStringFlag(flags, "zotero-library-id"),
     zoteroLibraryType: getStringFlag(flags, "zotero-library-type"),
+    zoteroCollectionKey: getStringFlag(flags, "zotero-collection-key"),
     zoteroApiKey: getStringFlag(flags, "zotero-api-key"),
     embeddingProvider: getStringFlag(flags, "embedding-provider"),
     embeddingModel: getStringFlag(flags, "embedding-model"),
@@ -137,7 +138,7 @@ Usage:
   zotlit sync [--attachments-root <path>]
   zotlit status
   zotlit version
-  zotlit add [--doi <doi> | --s2-paper-id <id>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--item-type <type>]
+  zotlit add [--doi <doi> | --s2-paper-id <id>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--collection-key <key>] [--item-type <type>]
   zotlit s2 "<text>" [--limit <n>]
   zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank|--no-rerank]
   zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
@@ -192,6 +193,7 @@ Options:
   --publication <text>        Set journal, website, or container title when supported.
   --url <url>                 Set the item URL.
   --url-date <date>           Set the access date for the URL.
+  --collection-key <key>      Add the new item to a Zotero collection by collection key.
   --item-type <type>          Override the Zotero item type. Default: journalArticle or webpage.
   --exact                     Use Tantivy-based lexical search for search.
   --limit <n>                 Return up to n search results. Default: 10 for search, 20 for metadata.
@@ -210,7 +212,7 @@ Options:
 Examples:
   zotlit add --doi "10.1016/j.econmod.2026.107590"
   zotlit add --s2-paper-id "f2005ed06241e8aa6f55f7ed9279a56b92038128"
-  zotlit add --title "Working Paper" --author "Jane Doe" --year 2026 --url "https://example.com"
+  zotlit add --title "Working Paper" --author "Jane Doe" --year 2026 --collection-key "ABCD1234" --url "https://example.com"
   zotlit s2 "state-owned enterprise governance" --limit 5
   zotlit search "dangwei shuji" --exact
   zotlit search "state-owned enterprise governance" --limit 5 --min-score 0.4
@@ -224,6 +226,8 @@ Examples:
 Config:
   Paths and other defaults are read from ~/.zotlit/config.json.
   The add command also needs zoteroLibraryId, zoteroLibraryType, and zoteroApiKey.
+  zoteroLibraryType supports both user and group.
+  zoteroCollectionKey sets the default collection for new add commands.
   The s2 command and --s2-paper-id also need semanticScholarApiKey.
 `);
 }
@@ -314,6 +318,7 @@ async function main(): Promise<void> {
           "url",
           "url-date",
           "access-date",
+          "collection-key",
           "item-type",
         ].filter((flag) => parsed.flags[flag] === true);
         if (missingValueFlags.length > 0) {
@@ -346,6 +351,9 @@ async function main(): Promise<void> {
           ...(getStringFlag(parsed.flags, "url") ? { url: getStringFlag(parsed.flags, "url")! } : {}),
           ...(getStringFlag(parsed.flags, "url-date", "access-date")
             ? { urlDate: getStringFlag(parsed.flags, "url-date", "access-date")! }
+            : {}),
+          ...(getStringFlag(parsed.flags, "collection-key")
+            ? { collectionKey: getStringFlag(parsed.flags, "collection-key")! }
             : {}),
           ...(getStringFlag(parsed.flags, "item-type")
             ? { itemType: getStringFlag(parsed.flags, "item-type")! }

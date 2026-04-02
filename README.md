@@ -73,6 +73,7 @@ Minimal example:
   "semanticScholarApiKey": "<api-key>",
   "zoteroLibraryId": "<library-id>",
   "zoteroLibraryType": "user",
+  "zoteroCollectionKey": "<optional-collection-key>",
   "zoteroApiKey": "<api-key>"
 }
 ```
@@ -82,6 +83,7 @@ API credentials can also come from environment variables:
 - `ZOTLIT_SEMANTIC_SCHOLAR_API_KEY`
 - `ZOTLIT_ZOTERO_LIBRARY_ID`
 - `ZOTLIT_ZOTERO_LIBRARY_TYPE`
+- `ZOTLIT_ZOTERO_COLLECTION_KEY`
 - `ZOTLIT_ZOTERO_API_KEY`
 
 Fallback environment variable names:
@@ -89,9 +91,12 @@ Fallback environment variable names:
 - `SEMANTIC_SCHOLAR_API_KEY`
 - `ZOTERO_LIBRARY_ID`
 - `ZOTERO_LIBRARY_TYPE`
+- `ZOTERO_COLLECTION_KEY`
 - `ZOTERO_API_KEY`
 
 `semanticScholarApiKey` is only needed for `zotlit s2` and `zotlit add --s2-paper-id`.
+`zoteroCollectionKey` is optional and sets the default collection for new items created by `add`.
+`zoteroLibraryType` supports both `user` and `group`.
 
 ## Commands
 
@@ -99,7 +104,7 @@ Fallback environment variable names:
 zotlit sync [--attachments-root <path>]
 zotlit status
 zotlit version
-zotlit add [--doi <doi> | --s2-paper-id <id>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--item-type <type>]
+zotlit add [--doi <doi> | --s2-paper-id <id>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--collection-key <key>] [--item-type <type>]
 zotlit s2 "<text>" [--limit <n>]
 zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank | --no-rerank]
 zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
@@ -129,9 +134,20 @@ zotlit add \
   --title "Working Paper Title" \
   --author "Jane Doe" \
   --year 2026 \
+  --collection-key "ABCD1234" \
   --publication "Working Paper Series" \
   --url "https://example.com/paper" \
   --url-date "2026-04-02"
+```
+
+Group library example:
+
+```json
+{
+  "zoteroLibraryId": "<group-id>",
+  "zoteroLibraryType": "group",
+  "zoteroApiKey": "<api-key>"
+}
 ```
 
 Build or refresh the local index:
@@ -164,6 +180,7 @@ zotlit expand --file "~/Library/.../paper.pdf" --block-start 10 --radius 2
 
 - `add` returns `itemKey` immediately, so an agent can cite the item right away.
 - `add --s2-paper-id` prefers DOI import when Semantic Scholar returns a DOI, and falls back to Semantic Scholar metadata when it does not.
+- `add` writes to the library root by default. Set `zoteroCollectionKey` in config or pass `--collection-key <key>` to place new items in a collection.
 - New items created by `add` receive the tag `Added by AI Agent`.
 - Creating an item in Zotero does not make it instantly searchable in local PDF search. `metadata` depends on your exported bibliography JSON, and PDF search depends on `sync`.
 - `journalArticle` items keep `publicationTitle` but do not write `publisher`.

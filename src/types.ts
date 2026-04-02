@@ -9,6 +9,7 @@ export interface AppConfig {
   semanticScholarApiKey?: string;
   zoteroLibraryId?: string;
   zoteroLibraryType?: ZoteroLibraryType;
+  zoteroCollectionKey?: string;
   zoteroApiKey?: string;
   warnings: string[];
 }

@@ -63,6 +63,7 @@ interface AddInput {
   url?: string;
   urlDate?: string;
   abstract?: string;
+  collectionKey?: string;
   itemType?: string;
 }
 
@@ -269,8 +270,14 @@ function normalizeInput(input: AddInput): Required<Omit<AddInput, "doi" | "itemT
     url: normalizeSpace(input.url || ""),
     urlDate: normalizeSpace(input.urlDate || ""),
     abstract: normalizeSpace(input.abstract || ""),
+    collectionKey: normalizeSpace(input.collectionKey || ""),
     ...(input.itemType ? { itemType: normalizeSpace(input.itemType) } : {}),
   };
+}
+
+function applyCollectionKey(payload: EditableZoteroItem, collectionKey: string | undefined): void {
+  if (!collectionKey || !("collections" in payload)) return;
+  payload.collections = [collectionKey];
 }
 
 function getWriteConfig(config: AppConfig): ResolvedWriteConfig {
@@ -367,6 +374,7 @@ function applyManualOverrides(
   if (input.url && "url" in payload) payload.url = input.url;
   if (input.urlDate && "accessDate" in payload) payload.accessDate = input.urlDate;
   if (input.abstract && "abstractNote" in payload) payload.abstractNote = input.abstract;
+  applyCollectionKey(payload, input.collectionKey || undefined);
 }
 
 function buildItemFromCsl(
@@ -474,25 +482,30 @@ export async function addToZotero(
   const writeConfig = getWriteConfig(config);
   const normalizedInput = normalizeInput(input);
   const warnings = [...config.warnings];
+  const effectiveCollectionKey = normalizedInput.collectionKey || config.zoteroCollectionKey || "";
+  const normalizedWithDefaults = {
+    ...normalizedInput,
+    collectionKey: effectiveCollectionKey,
+  };
 
-  if (!normalizedInput.doi && !normalizedInput.title) {
+  if (!normalizedWithDefaults.doi && !normalizedWithDefaults.title) {
     throw new Error("Provide --doi <doi> or --title <text>.");
   }
 
   const manualItemType = inferManualItemType({
-    itemType: normalizedInput.itemType,
-    publication: normalizedInput.publication,
-    url: normalizedInput.url,
+    itemType: normalizedWithDefaults.itemType,
+    publication: normalizedWithDefaults.publication,
+    url: normalizedWithDefaults.url,
   });
 
-  if (normalizedInput.doi) {
-    const cleanedDoi = cleanDoi(normalizedInput.doi);
+  if (normalizedWithDefaults.doi) {
+    const cleanedDoi = cleanDoi(normalizedWithDefaults.doi);
     try {
       const cslJson = await fetchCslJsonForDoi(cleanedDoi, fetchImpl);
-      const itemType = normalizedInput.itemType || determineDoiItemType(cslJson);
+      const itemType = normalizedWithDefaults.itemType || determineDoiItemType(cslJson);
       const template = await fetchTemplate(itemType, fetchImpl);
       const payload = buildItemFromCsl(template, cslJson, cleanedDoi);
-      applyManualOverrides(payload, normalizedInput);
+      applyManualOverrides(payload, normalizedWithDefaults);
       const itemKey = await createItem(writeConfig, payload, fetchImpl);
       return {
         itemKey,
@@ -504,14 +517,14 @@ export async function addToZotero(
         warnings,
       };
     } catch (error) {
-      if (!normalizedInput.title) {
+      if (!normalizedWithDefaults.title) {
         throw error;
       }
       warnings.push(
         `DOI import failed; created item from manual fields instead. ${error instanceof Error ? error.message : String(error)}`,
       );
       const template = await fetchTemplate(manualItemType, fetchImpl);
-      const payload = buildManualItem(template, normalizedInput);
+      const payload = buildManualItem(template, normalizedWithDefaults);
       if ("DOI" in payload) payload.DOI = cleanedDoi;
       const itemKey = await createItem(writeConfig, payload, fetchImpl);
       return {
@@ -527,7 +540,7 @@ export async function addToZotero(
   }
 
   const template = await fetchTemplate(manualItemType, fetchImpl);
-  const payload = buildManualItem(template, normalizedInput);
+  const payload = buildManualItem(template, normalizedWithDefaults);
   const itemKey = await createItem(writeConfig, payload, fetchImpl);
   return {
     itemKey,

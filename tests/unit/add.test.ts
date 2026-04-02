@@ -93,6 +93,109 @@ test("addToZotero creates a manual item from basic fields", async () => {
   ]);
 });
 
+test("addToZotero applies the configured default collection key", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input);
+    requests.push({ url, init });
+
+    if (url === "https://api.zotero.org/items/new?itemType=journalArticle") {
+      return jsonResponse({
+        itemType: "journalArticle",
+        title: "",
+        creators: [],
+        date: "",
+        publicationTitle: "",
+        url: "",
+        accessDate: "",
+        tags: [],
+        collections: [],
+        relations: {},
+      });
+    }
+
+    if (url === "https://api.zotero.org/groups/7890/items") {
+      return jsonResponse({
+        success: {
+          "0": "COLL1234",
+        },
+      });
+    }
+
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await addToZotero(
+    {
+      title: "Grouped Entry",
+    },
+    {
+      zoteroLibraryId: "7890",
+      zoteroLibraryType: "group",
+      zoteroCollectionKey: "COLKEY123",
+      zoteroApiKey: "secret",
+    },
+    fetchMock,
+  );
+
+  const createRequest = requests.at(-1);
+  assert.ok(createRequest);
+  const body = JSON.parse(String(createRequest?.init?.body)) as Array<Record<string, unknown>>;
+  assert.deepEqual(body[0]?.collections, ["COLKEY123"]);
+});
+
+test("addToZotero lets command input override the configured collection key", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input);
+    requests.push({ url, init });
+
+    if (url === "https://api.zotero.org/items/new?itemType=journalArticle") {
+      return jsonResponse({
+        itemType: "journalArticle",
+        title: "",
+        creators: [],
+        date: "",
+        publicationTitle: "",
+        url: "",
+        accessDate: "",
+        tags: [],
+        collections: [],
+        relations: {},
+      });
+    }
+
+    if (url === "https://api.zotero.org/users/123456/items") {
+      return jsonResponse({
+        success: {
+          "0": "OVERRIDE1",
+        },
+      });
+    }
+
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await addToZotero(
+    {
+      title: "Manual Entry",
+      collectionKey: "CLIKEY999",
+    },
+    {
+      zoteroLibraryId: "123456",
+      zoteroLibraryType: "user",
+      zoteroCollectionKey: "CONFIGKEY1",
+      zoteroApiKey: "secret",
+    },
+    fetchMock,
+  );
+
+  const createRequest = requests.at(-1);
+  assert.ok(createRequest);
+  const body = JSON.parse(String(createRequest?.init?.body)) as Array<Record<string, unknown>>;
+  assert.deepEqual(body[0]?.collections, ["CLIKEY999"]);
+});
+
 test("addToZotero falls back to manual fields when DOI lookup fails", async () => {
   const requests: string[] = [];
   const fetchMock: typeof fetch = async (input) => {
@@ -373,4 +476,67 @@ test("addS2PaperToZotero creates a manual item when no DOI is available", async 
   assert.equal(body[0]?.proceedingsTitle, "Proceedings of Testing");
   assert.equal(body[0]?.abstractNote, "No DOI available");
   assert.equal(body[0]?.url, "https://www.semanticscholar.org/paper/paper-456");
+});
+
+test("addS2PaperToZotero carries collection overrides into the created item", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input);
+    requests.push({ url, init });
+
+    if (url === "https://api.semanticscholar.org/graph/v1/paper/paper-789?fields=title%2Cauthors%2Cyear%2CexternalIds%2CpublicationTypes%2Cjournal%2Curl%2CopenAccessPdf%2CpublicationDate%2Cvenue%2Cabstract") {
+      return jsonResponse({
+        paperId: "paper-789",
+        title: "Configured Collection Paper",
+        authors: [{ name: "Jane Doe" }],
+        year: 2025,
+        publicationTypes: ["JournalArticle"],
+        journal: { name: "Testing Journal" },
+      });
+    }
+    if (url === "https://api.zotero.org/items/new?itemType=journalArticle") {
+      return jsonResponse({
+        itemType: "journalArticle",
+        title: "",
+        creators: [],
+        date: "",
+        publicationTitle: "",
+        abstractNote: "",
+        url: "",
+        accessDate: "",
+        tags: [],
+        collections: [],
+        relations: {},
+      });
+    }
+    if (url === "https://api.zotero.org/users/123456/items") {
+      return jsonResponse({
+        success: {
+          "0": "S2COLL01",
+        },
+      });
+    }
+
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await addS2PaperToZotero(
+    "paper-789",
+    {
+      collectionKey: "PAPERCOL1",
+    },
+    {
+      semanticScholarApiKey: "s2-secret",
+      zoteroLibraryId: "123456",
+      zoteroLibraryType: "user",
+      zoteroCollectionKey: "CONFIGCOL1",
+      zoteroApiKey: "secret",
+    },
+    fetchMock,
+  );
+
+  const createRequest = requests.at(-1);
+  assert.ok(createRequest);
+  const body = JSON.parse(String(createRequest?.init?.body)) as Array<Record<string, unknown>>;
+  assert.deepEqual(body[0]?.collections, ["PAPERCOL1"]);
 });

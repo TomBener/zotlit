@@ -38,6 +38,7 @@ test("help summarizes current commands and keeps config-only overrides out of th
   assert.match(result.stdout, /Options:/);
   assert.match(result.stdout, /--doi <doi>\s+Import from DOI metadata when possible\./);
   assert.match(result.stdout, /--s2-paper-id <id>\s+Import a Semantic Scholar paper by paperId\./);
+  assert.match(result.stdout, /--collection-key <key>\s+Add the new item to a Zotero collection by collection key\./);
   assert.match(result.stdout, /--item-type <type>\s+Override the Zotero item type\./);
   assert.match(result.stdout, /--version\s+Print the current zotlit version\./);
   assert.match(
@@ -47,6 +48,8 @@ test("help summarizes current commands and keeps config-only overrides out of th
   assert.match(result.stdout, /--field <field>\s+Limit metadata search/);
   assert.match(result.stdout, /--has-pdf\s+Keep only metadata results/);
   assert.match(result.stdout, /expand currently requires --file\./);
+  assert.match(result.stdout, /zoteroLibraryType supports both user and group\./);
+  assert.match(result.stdout, /zoteroCollectionKey sets the default collection/);
   assert.match(result.stdout, /Paths and other defaults are read from \~\/\.zotlit\/config\.json\./);
   assert.doesNotMatch(result.stdout, /--bibliography <path>/);
   assert.doesNotMatch(result.stdout, /--data-dir <path>/);

@@ -13,6 +13,7 @@ interface RawConfig {
   semanticScholarApiKey?: string;
   zoteroLibraryId?: string;
   zoteroLibraryType?: string;
+  zoteroCollectionKey?: string;
   zoteroApiKey?: string;
   embeddingProvider?: string;
   embeddingModel?: string;
@@ -27,6 +28,7 @@ export interface ConfigOverrides {
   semanticScholarApiKey?: string;
   zoteroLibraryId?: string;
   zoteroLibraryType?: string;
+  zoteroCollectionKey?: string;
   zoteroApiKey?: string;
   embeddingProvider?: string;
   embeddingModel?: string;
@@ -128,6 +130,12 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AppConfig {
         fileConfig.zoteroLibraryType,
       ),
       warnings,
+    ),
+    zoteroCollectionKey: firstDefined(
+      overrides.zoteroCollectionKey,
+      process.env.ZOTLIT_ZOTERO_COLLECTION_KEY,
+      process.env.ZOTERO_COLLECTION_KEY,
+      fileConfig.zoteroCollectionKey,
     ),
     zoteroApiKey: firstDefined(
       overrides.zoteroApiKey,
