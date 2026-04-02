@@ -4,9 +4,9 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { getDataPaths } from "./config.js";
-import { openExactIndex } from "./tantivy.js";
-import type { AppConfig, AttachmentManifest, CatalogEntry } from "./types.js";
+import { getDataPaths } from "../../src/config.js";
+import { openExactIndex } from "../../src/tantivy.js";
+import type { AppConfig, AttachmentManifest, CatalogEntry } from "../../src/types.js";
 
 function createConfig(dataDir: string): AppConfig {
   return {

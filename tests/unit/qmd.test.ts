@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyQmdRuntimeEnv } from "./qmd.js";
-import type { AppConfig } from "./types.js";
+import { applyQmdRuntimeEnv } from "../../src/qmd.js";
+import type { AppConfig } from "../../src/types.js";
 
 function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {

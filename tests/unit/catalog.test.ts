@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadCatalog } from "./catalog.js";
+import { loadCatalog } from "../../src/catalog.js";
 
 test("loadCatalog keeps attachments inside root and marks only pdf as supported", () => {
   const root = mkdtempSync(join(tmpdir(), "zotlit-catalog-"));

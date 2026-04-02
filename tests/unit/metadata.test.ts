@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { searchMetadata } from "./metadata.js";
+import { searchMetadata } from "../../src/metadata.js";
 
 function createFixturePaths(root: string): {
   attachmentsRoot: string;

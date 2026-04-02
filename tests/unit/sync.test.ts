@@ -4,10 +4,10 @@ import { existsSync, mkdtempSync, mkdirSync, statSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildHiddenJavaToolOptions, runSync, withHiddenJavaDockIcon } from "./sync.js";
-import { writeCatalogFile } from "./state.js";
-import type { CatalogFile } from "./types.js";
-import { sha1 } from "./utils.js";
+import { buildHiddenJavaToolOptions, runSync, withHiddenJavaDockIcon } from "../../src/sync.js";
+import { writeCatalogFile } from "../../src/state.js";
+import type { CatalogFile } from "../../src/types.js";
+import { sha1 } from "../../src/utils.js";
 
 test("buildHiddenJavaToolOptions appends dock-hiding flag without dropping existing options", () => {
   assert.equal(

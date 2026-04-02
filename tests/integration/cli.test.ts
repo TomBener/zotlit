@@ -5,15 +5,16 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const cliPath = new URL("./cli.ts", import.meta.url).pathname;
+const repoRoot = new URL("../..", import.meta.url);
+const cliPath = new URL("../../src/cli.ts", import.meta.url).pathname;
 const expectedVersion = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+  readFileSync(new URL("../../package.json", import.meta.url), "utf-8"),
 ) as { version: string };
 
 function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, ["--import", "tsx", cliPath, ...args], {
     encoding: "utf-8",
-    cwd: new URL(".", import.meta.url).pathname,
+    cwd: repoRoot.pathname,
   });
 
   return {

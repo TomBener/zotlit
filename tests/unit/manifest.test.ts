@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPdfManifest } from "./manifest.js";
-import { mapChunkToBlockRange } from "./engine.js";
+import { buildPdfManifest } from "../../src/manifest.js";
+import { mapChunkToBlockRange } from "../../src/engine.js";
 
 test("buildPdfManifest creates positioned blocks from ODL json", () => {
   const built = buildPdfManifest(

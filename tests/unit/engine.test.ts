@@ -4,9 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { expandDocument, readDocument, searchLiterature } from "./engine.js";
-import { writeCatalogFile } from "./state.js";
-import type { AttachmentManifest, CatalogFile } from "./types.js";
+import { expandDocument, readDocument, searchLiterature } from "../../src/engine.js";
+import { writeCatalogFile } from "../../src/state.js";
+import type { AttachmentManifest, CatalogFile } from "../../src/types.js";
 
 function writeManifest(path: string, manifest: AttachmentManifest): void {
   mkdirSync(dirname(path), { recursive: true });

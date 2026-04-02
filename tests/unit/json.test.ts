@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { emitError, emitOk } from "./json.js";
+import { emitError, emitOk } from "../../src/json.js";
 
 function captureConsole(run: () => void): string {
   const messages: string[] = [];

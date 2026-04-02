@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { getDataPaths } from "./config.js";
+import { getDataPaths } from "../../src/config.js";
 
 test("getDataPaths keeps index outputs in dataDir but uses system temp for extraction work", () => {
   const paths = getDataPaths("/Users/example/Library/Mobile Documents/com~apple~CloudDocs/Zotlit");
