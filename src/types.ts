@@ -1,10 +1,14 @@
 export type SupportedFileType = "pdf" | "epub" | "other";
+export type ZoteroLibraryType = "user" | "group";
 
 export interface AppConfig {
   bibliographyJsonPath: string;
   attachmentsRoot: string;
   dataDir: string;
   qmdEmbedModel?: string;
+  zoteroLibraryId?: string;
+  zoteroLibraryType?: ZoteroLibraryType;
+  zoteroApiKey?: string;
   warnings: string[];
 }
 

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-import type { AppConfig, DataPaths } from "./types.js";
+import type { AppConfig, DataPaths, ZoteroLibraryType } from "./types.js";
 import { resolveHomePath } from "./utils.js";
 
 interface RawConfig {
@@ -10,6 +10,9 @@ interface RawConfig {
   attachmentsRoot?: string;
   dataDir?: string;
   qmdEmbedModel?: string;
+  zoteroLibraryId?: string;
+  zoteroLibraryType?: string;
+  zoteroApiKey?: string;
   embeddingProvider?: string;
   embeddingModel?: string;
   googleApiKey?: string;
@@ -20,6 +23,9 @@ export interface ConfigOverrides {
   attachmentsRoot?: string;
   dataDir?: string;
   qmdEmbedModel?: string;
+  zoteroLibraryId?: string;
+  zoteroLibraryType?: string;
+  zoteroApiKey?: string;
   embeddingProvider?: string;
   embeddingModel?: string;
   googleApiKey?: string;
@@ -34,6 +40,13 @@ const DEFAULTS = {
 
 function firstDefined(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => typeof value === "string" && value.length > 0);
+}
+
+function resolveLibraryType(raw: string | undefined, warnings: string[]): ZoteroLibraryType | undefined {
+  if (!raw) return undefined;
+  if (raw === "user" || raw === "group") return raw;
+  warnings.push(`Config field 'zoteroLibraryType' must be either 'user' or 'group'.`);
+  return undefined;
 }
 
 export function getConfigPath(): string {
@@ -92,6 +105,27 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AppConfig {
       process.env.QMD_EMBED_MODEL,
       fileConfig.qmdEmbedModel,
       DEFAULTS.qmdEmbedModel,
+    ),
+    zoteroLibraryId: firstDefined(
+      overrides.zoteroLibraryId,
+      process.env.ZOTLIT_ZOTERO_LIBRARY_ID,
+      process.env.ZOTERO_LIBRARY_ID,
+      fileConfig.zoteroLibraryId,
+    ),
+    zoteroLibraryType: resolveLibraryType(
+      firstDefined(
+        overrides.zoteroLibraryType,
+        process.env.ZOTLIT_ZOTERO_LIBRARY_TYPE,
+        process.env.ZOTERO_LIBRARY_TYPE,
+        fileConfig.zoteroLibraryType,
+      ),
+      warnings,
+    ),
+    zoteroApiKey: firstDefined(
+      overrides.zoteroApiKey,
+      process.env.ZOTLIT_ZOTERO_API_KEY,
+      process.env.ZOTERO_API_KEY,
+      fileConfig.zoteroApiKey,
     ),
     warnings,
   };

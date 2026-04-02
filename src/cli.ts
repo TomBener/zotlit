@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { addToZotero } from "./add.js";
 import { getDataPaths, resolveConfig, type ConfigOverrides } from "./config.js";
 import { expandDocument, getIndexStatus, readDocument, searchLiterature } from "./engine.js";
 import { emitError, emitOk } from "./json.js";
@@ -115,6 +116,9 @@ function overridesFromFlags(flags: Record<string, FlagValue>): ConfigOverrides {
     attachmentsRoot: getStringFlag(flags, "attachments-root"),
     dataDir: getStringFlag(flags, "data-dir"),
     qmdEmbedModel: getStringFlag(flags, "qmd-embed-model"),
+    zoteroLibraryId: getStringFlag(flags, "zotero-library-id"),
+    zoteroLibraryType: getStringFlag(flags, "zotero-library-type"),
+    zoteroApiKey: getStringFlag(flags, "zotero-api-key"),
     embeddingProvider: getStringFlag(flags, "embedding-provider"),
     embeddingModel: getStringFlag(flags, "embedding-model"),
     googleApiKey: getStringFlag(flags, "google-api-key"),
@@ -130,6 +134,7 @@ Usage:
   zotlit sync [--attachments-root <path>]
   zotlit status
   zotlit version
+  zotlit add [--doi <doi>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--item-type <type>]
   zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank|--no-rerank]
   zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
   zotlit read (--file <path> | --item-key <key>) [--offset-block <n>] [--limit-blocks <n>]
@@ -145,6 +150,10 @@ Commands:
 
   version
     Print the current zotlit version.
+
+  add
+    Add a Zotero item and return its itemKey immediately.
+    Prefer --doi when available. Use basic fields as a manual fallback.
 
   search
     Search indexed Zotero PDFs.
@@ -167,6 +176,14 @@ Commands:
 
 Options:
   --attachments-root <path>   Limit sync to a Zotero subfolder.
+  --doi <doi>                 Import from DOI metadata when possible.
+  --title <text>              Set title for manual add or DOI fallback.
+  --author <name>             Add an author. Repeat for multiple authors.
+  --year <text>               Set the Zotero date field.
+  --publication <text>        Set journal, website, or container title when supported.
+  --url <url>                 Set the item URL.
+  --url-date <date>           Set the access date for the URL.
+  --item-type <type>          Override the Zotero item type. Default: journalArticle or webpage.
   --exact                     Use Tantivy-based lexical search for search.
   --limit <n>                 Return up to n search results. Default: 10 for search, 20 for metadata.
   --min-score <n>             Drop lower-scoring search hits before mapping.
@@ -182,6 +199,8 @@ Options:
   --version                   Print the current zotlit version.
 
 Examples:
+  zotlit add --doi "10.1016/j.econmod.2026.107590"
+  zotlit add --title "Working Paper" --author "Jane Doe" --year 2026 --url "https://example.com"
   zotlit search "dangwei shuji" --exact
   zotlit search "state-owned enterprise governance" --limit 5 --min-score 0.4
   zotlit metadata "American Journal of Political Science" --field journal
@@ -193,6 +212,7 @@ Examples:
 
 Config:
   Paths and other defaults are read from ~/.zotlit/config.json.
+  The add command also needs zoteroLibraryId, zoteroLibraryType, and zoteroApiKey.
 `);
 }
 
@@ -264,6 +284,52 @@ async function main(): Promise<void> {
           return;
         }
         console.log(getCliVersion());
+        return;
+      }
+
+      case "add": {
+        if (parsed.positionals.length > 1) {
+          emitError("UNEXPECTED_ARGUMENT", "add does not accept positional arguments. Use flags such as --doi or --title.");
+          return;
+        }
+        const missingValueFlags = [
+          "doi",
+          "title",
+          "author",
+          "year",
+          "publication",
+          "url",
+          "url-date",
+          "access-date",
+          "item-type",
+        ].filter((flag) => parsed.flags[flag] === true);
+        if (missingValueFlags.length > 0) {
+          emitError(
+            "INVALID_ARGUMENT",
+            `Missing value for: ${missingValueFlags.map((flag) => `--${flag}`).join(", ")}`,
+          );
+          return;
+        }
+        const doi = getStringFlag(parsed.flags, "doi");
+        const title = getStringFlag(parsed.flags, "title");
+        if (!doi && !title) {
+          emitError("MISSING_ARGUMENT", "Provide --doi <doi> or --title <text> for add.");
+          return;
+        }
+        const data = await addToZotero(
+          {
+            doi,
+            title,
+            authors: getStringListFlag(parsed.flags, "author"),
+            year: getStringFlag(parsed.flags, "year"),
+            publication: getStringFlag(parsed.flags, "publication"),
+            url: getStringFlag(parsed.flags, "url"),
+            urlDate: getStringFlag(parsed.flags, "url-date", "access-date"),
+            itemType: getStringFlag(parsed.flags, "item-type"),
+          },
+          overrides,
+        );
+        emitOk(data, { elapsedMs: Date.now() - startedAt });
         return;
       }
 

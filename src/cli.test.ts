@@ -30,9 +30,12 @@ test("help summarizes current commands and keeps config-only overrides out of th
   assert.match(result.stdout, /Usage:/);
   assert.match(result.stdout, /zotlit sync \[--attachments-root <path>\]/);
   assert.match(result.stdout, /zotlit version/);
+  assert.match(result.stdout, /zotlit add \[--doi <doi>\] \[--title <text>\]/);
   assert.match(result.stdout, /zotlit search "<text>" \[--exact\] \[--limit <n>\]/);
   assert.match(result.stdout, /zotlit metadata "<text>" \[--limit <n>\] \[--field <field>\] \[--has-pdf\]/);
   assert.match(result.stdout, /Options:/);
+  assert.match(result.stdout, /--doi <doi>\s+Import from DOI metadata when possible\./);
+  assert.match(result.stdout, /--item-type <type>\s+Override the Zotero item type\./);
   assert.match(result.stdout, /--version\s+Print the current zotlit version\./);
   assert.match(
     result.stdout,
@@ -67,6 +70,22 @@ test("sync rejects unexpected positional path and points to attachments-root", (
   assert.equal(result.status, 1);
   assert.match(result.stdout, /"code": "UNEXPECTED_ARGUMENT"/);
   assert.match(result.stdout, /Use --attachments-root/);
+});
+
+test("add requires doi or title", () => {
+  const result = runCli(["add"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /"code": "MISSING_ARGUMENT"/);
+  assert.match(result.stdout, /Provide --doi <doi> or --title <text> for add\./);
+});
+
+test("add rejects positional arguments", () => {
+  const result = runCli(["add", "10.1000/test"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /"code": "UNEXPECTED_ARGUMENT"/);
+  assert.match(result.stdout, /add does not accept positional arguments/);
 });
 
 test("search rejects removed query flag and points to positional usage", () => {

@@ -19,6 +19,7 @@ Current scope:
 Main commands:
 
 - `sync`: build or refresh the local index
+- `add`: create a Zotero item and return its `itemKey`
 - `search`: search indexed PDFs
 - `metadata`: search bibliography metadata
 - `read` / `expand`: read blocks and local context after a hit
@@ -93,7 +94,10 @@ Example config:
 {
   "bibliographyJsonPath": "~/Library/CloudStorage/Dropbox/bibliography/bibliography.json",
   "attachmentsRoot": "~/Library/Mobile Documents/com~apple~CloudDocs/Zotero",
-  "dataDir": "~/Library/Mobile Documents/com~apple~CloudDocs/Zotlit"
+  "dataDir": "~/Library/Mobile Documents/com~apple~CloudDocs/Zotlit",
+  "zoteroLibraryId": "<library-id>",
+  "zoteroLibraryType": "user",
+  "zoteroApiKey": "<api-key>"
 }
 ```
 
@@ -106,6 +110,14 @@ If you want to set a qmd embedding model:
 ```
 
 The main CLI help does not list these configuration-oriented overrides. They are read from `~/.zotlit/config.json` by default.
+
+For the `add` command only, you can also use environment variables:
+
+- `ZOTLIT_ZOTERO_LIBRARY_ID`
+- `ZOTLIT_ZOTERO_LIBRARY_TYPE`
+- `ZOTLIT_ZOTERO_API_KEY`
+
+`ZOTERO_LIBRARY_ID`, `ZOTERO_LIBRARY_TYPE`, and `ZOTERO_API_KEY` are also accepted for easier migration from other Zotero CLI setups.
 
 ## Release And Distribution
 
@@ -125,6 +137,7 @@ node dist/cli.js help
 zotlit sync [--attachments-root <path>]
 zotlit status
 zotlit version
+zotlit add [--doi <doi>] [--title <text>] [--author <name>] [--year <text>] [--publication <text>] [--url <url>] [--url-date <date>] [--item-type <type>]
 zotlit search "<text>" [--exact] [--limit <n>] [--min-score <n>] [--rerank | --no-rerank]
 zotlit metadata "<text>" [--limit <n>] [--field <field>] [--has-pdf]
 zotlit read (--file <path> | --item-key <key>) [--offset-block <n>] [--limit-blocks <n>]
@@ -171,7 +184,37 @@ After extraction, `sync` also prints two stage messages:
 
 The first stage rebuilds the lexical exact index. The later stages are qmd index work, not a hang.
 
-### 2. `status`
+### 2. `add`
+
+`add` writes a new item to Zotero through the Zotero Web API and returns its `itemKey` immediately.
+
+Prefer DOI when you have one:
+
+```bash
+zotlit add --doi "10.1016/j.econmod.2026.107590"
+```
+
+If there is no DOI, or DOI lookup fails, you can create a basic item manually:
+
+```bash
+zotlit add \
+  --title "Working Paper Title" \
+  --author "Jane Doe" \
+  --author "John Smith" \
+  --year 2026 \
+  --publication "Working Paper Series" \
+  --url "https://example.com/paper" \
+  --url-date "2026-04-02"
+```
+
+Notes:
+
+- `--author` can be repeated
+- `--item-type` overrides the default inferred item type
+- when `--doi` is provided, `zotlit` checks for an existing item with the same DOI first and returns that existing `itemKey` instead of creating a duplicate
+- creating an item in Zotero does not make it instantly available to `zotlit metadata` or `zotlit search`; those still depend on your exported `bibliography.json` and local `sync`
+
+### 3. `status`
 
 `status` shows the current index state and local paths.
 
@@ -208,7 +251,7 @@ Example:
 }
 ```
 
-### 3. `search`
+### 4. `search`
 
 `search` runs against indexed PDFs.
 
@@ -295,7 +338,7 @@ The most important fields in a `search` result are:
 - `score`
   qmd score plus a small amount of `zotlit` post-processing
 
-### 4. `metadata`
+### 5. `metadata`
 
 `metadata` searches Zotero bibliography metadata directly from `bibliography.json`.
 
@@ -344,7 +387,7 @@ Example output:
 }
 ```
 
-### 5. `read`
+### 6. `read`
 
 `read` does not use qmd. It reads blocks directly from the local manifest.
 
@@ -381,7 +424,7 @@ Example output:
 }
 ```
 
-### 6. `expand`
+### 7. `expand`
 
 `expand` returns local context around a hit or a known block range. It also does not depend on qmd.
 

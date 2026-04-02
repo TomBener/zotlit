@@ -7,6 +7,7 @@
 Core design:
 
 - internal primary key: `zotero-item-key`
+- write operations should return `itemKey` immediately when possible
 - external search results primarily return `itemKey + file`
 - `citationKey` is a mutable display field only
 - current v1 scope is `PDF` only
@@ -23,6 +24,8 @@ Core design:
 - data dir: `~/Library/Mobile Documents/com~apple~CloudDocs/Zotlit`
 - config file: `~/.zotlit/config.json`
 - optional qmd embedding model: controlled by `qmdEmbedModel`; when unset, qmd uses its default model
+- Zotero write config for `add`: `zoteroLibraryId`, `zoteroLibraryType`, `zoteroApiKey`
+- environment overrides for `add`: `ZOTLIT_ZOTERO_LIBRARY_ID`, `ZOTLIT_ZOTERO_LIBRARY_TYPE`, `ZOTLIT_ZOTERO_API_KEY`
 
 Legacy fields `embeddingProvider`, `embeddingModel`, and `googleApiKey` may still appear in config, but they are only read for compatibility and produce deprecation warnings.
 
@@ -41,6 +44,7 @@ npm run build
 
 node dist/cli.js sync
 node dist/cli.js status
+node dist/cli.js add --doi "10.1016/j.econmod.2026.107590"
 node dist/cli.js search "aging in China"
 node dist/cli.js read --file "~/Library/.../paper.pdf"
 node dist/cli.js expand --file "~/Library/.../paper.pdf" --block-start 10 --block-end 12
@@ -49,6 +53,7 @@ node dist/cli.js expand --file "~/Library/.../paper.pdf" --block-start 10 --bloc
 ## Code Map
 
 - `src/cli.ts`: CLI entrypoint
+- `src/add.ts`: Zotero Web API write flow for DOI import and basic manual item creation
 - `src/config.ts`: config loading and path expansion
 - `src/catalog.ts`: bibliography parsing and attachment mapping
 - `src/manifest.ts`: conversion from ODL JSON into blocks, character ranges, and reference-like markers
