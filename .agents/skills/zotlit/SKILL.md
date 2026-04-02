@@ -1,24 +1,41 @@
 ---
 name: zotlit
-description: Use this skill whenever the user wants to search indexed Zotero PDFs with zotlit, inspect hits, read blocks from an indexed attachment, expand context around a hit, or turn zotlit results into Markdown notes that keep the itemKey. Use it whenever the user mentions Zotero literature search, exact phrase search, passages, itemKey, block ranges, or cited notes from zotlit results.
+description: Use this skill whenever the user wants to use zotlit to add Zotero items, search indexed Zotero PDFs, inspect hits, read blocks from an indexed attachment, expand context around a hit, or turn zotlit results into Markdown notes that keep the itemKey. Use it whenever the user mentions Zotero literature search, DOI import, exact phrase search, passages, itemKey, block ranges, or cited notes from zotlit results.
 ---
 
 # zotlit
 
-`zotlit` is a CLI for searching indexed Zotero PDFs.
+`zotlit` is a CLI for AI-agent Zotero workflows: add items, search indexed PDFs, search metadata, and read local passages.
 
 ## Main use
 
 For most agent tasks, use this path:
 
-1. `zotlit search "<text>"`
-2. If the user wants a literal phrase, add `--exact`
-3. Take the returned `file` and `blockStart`, then run `zotlit expand`
-4. Use `zotlit read` when the user wants a larger block slice from one indexed attachment
+1. If the user wants to add a source to Zotero, use `zotlit add`
+2. If the user wants to search indexed PDFs, use `zotlit search`
+3. If the user wants a literal phrase, add `--exact`
+4. Take the returned `file` and `blockStart`, then run `zotlit expand`
+5. Use `zotlit read` when the user wants a larger block slice from one indexed attachment
 
 `sync` is secondary. Use it only when the user explicitly wants to rebuild or refresh the index.
 
 ## Commands
+
+### Add
+
+```bash
+zotlit add --doi "10.1111/dech.70058"
+zotlit add --title "Working Paper Title" --author "Jane Doe" --year 2026 --publication "Working Paper Series"
+```
+
+Rules:
+
+- use `--doi` when the user has a DOI
+- use manual fields when there is no DOI or the user wants to create a basic record directly
+- `add` is speed-first and does not do Zotero-side duplicate checking
+- newly created items receive the tag `Added by AI Agent`
+- `add` returns `itemKey` immediately; use that as the citation handle
+- creating an item in Zotero does not make it instantly available to local PDF search; `metadata` depends on exported bibliography JSON and PDF search depends on `sync`
 
 ### Search
 
@@ -70,6 +87,14 @@ zotlit status
 
 Use `status` when the user wants paths, counts, or wants to check whether the index looks ready.
 
+### Metadata
+
+```bash
+zotlit metadata "Development and Change" --field journal
+```
+
+Use `metadata` when the user wants bibliography matches and does not need full-text PDF search.
+
 ### Sync
 
 ```bash
@@ -88,7 +113,7 @@ Rules:
 
 The Zotero item identifier for the work.
 
-Use it as the source handle in Markdown notes and citations.
+Use it as the source handle in Markdown notes, citations, and follow-up Zotero references after `add`.
 
 ### `file`
 
@@ -133,6 +158,16 @@ Use `file` only when a follow-up CLI command needs it.
 
 ## Troubleshooting
 
+### Added item does not appear in search
+
+`add` writes to Zotero immediately, but local search state is separate.
+
+Check:
+
+1. whether the exported bibliography JSON has refreshed
+2. whether the item has a PDF attachment under the configured attachments root
+3. whether `zotlit sync` has been run after the attachment is available
+
 ### No search results
 
 Check:
@@ -155,4 +190,4 @@ That usually means multiple indexed attachments share the same `itemKey`. Use `-
 - show the exact command when syntax matters
 - do not dump full JSON unless the user asked for it
 - pull out `itemKey`, `file`, `blockStart`, `blockEnd`, and `passage` when they drive the next step
-
+- when `add` is used, report `itemKey`, `title`, and any warnings
