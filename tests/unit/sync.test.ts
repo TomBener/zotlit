@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildHiddenJavaToolOptions, runSync, withHiddenJavaDockIcon } from "../../src/sync.js";
-import { writeCatalogFile } from "../../src/state.js";
+import { readCatalogFile, writeCatalogFile } from "../../src/state.js";
 import type { CatalogFile } from "../../src/types.js";
 import { sha1 } from "../../src/utils.js";
 
@@ -272,4 +272,116 @@ test("runSync removes stale normalized and manifest files when attachment disapp
   assert.equal(statSync(indexDir).isDirectory(), true);
   assert.equal(existsSync(normalizedPath), false);
   assert.equal(existsSync(manifestPath), false);
+});
+
+test("runSync records extraction failures per attachment and continues indexing others", async () => {
+  const root = mkdtempSync(join(tmpdir(), "zotlit-sync-error-"));
+  const attachmentsRoot = join(root, "attachments");
+  const dataDir = join(root, "data");
+  const manifestsDir = join(dataDir, "manifests");
+  const normalizedDir = join(dataDir, "normalized");
+  mkdirSync(attachmentsRoot, { recursive: true });
+
+  const goodPdfPath = join(attachmentsRoot, "good.pdf");
+  const badPdfPath = join(attachmentsRoot, "bad.pdf");
+  writeFileSync(goodPdfPath, "good");
+  writeFileSync(badPdfPath, "bad");
+
+  const bibliographyPath = join(root, "bibliography.json");
+  writeFileSync(
+    bibliographyPath,
+    JSON.stringify([
+      {
+        id: "good-cite",
+        title: "Good Paper",
+        author: [{ family: "Good", given: "Author" }],
+        file: goodPdfPath,
+        "zotero-item-key": "GOOD",
+      },
+      {
+        id: "bad-cite",
+        title: "Bad Paper",
+        author: [{ family: "Bad", given: "Author" }],
+        file: badPdfPath,
+        "zotero-item-key": "BAD",
+      },
+    ]),
+    "utf-8",
+  );
+
+  const fakeFactory = async () => ({
+    search: async () => [],
+    searchLex: async () => [],
+    update: async () => ({}),
+    embed: async () => ({}),
+    getStatus: async () => ({ documents: 1, collections: [], embeddings: { total: 1, stale: 0 } }),
+    listContexts: async () => [],
+    addContext: async () => true,
+    removeContext: async () => true,
+    close: async () => {},
+  });
+  const fakeExactFactory = async () => ({
+    rebuildExactIndex: async () => {},
+    searchExactCandidates: async () => [],
+    close: async () => {},
+  });
+
+  const fakeExtractBatch = async (batch: Array<{ docKey: string; filePath: string; itemKey: string }>) => {
+    const out = new Map<string, { manifestPath: string; normalizedPath: string }>();
+    for (const attachment of batch) {
+      if (attachment.itemKey === "BAD") {
+        throw new Error([
+          "Apr 02, 2026 8:08:03 PM org.verapdf.pd.font.cmap.CMapParser readLineBFRange",
+          "WARNING: Incorrect bfrange in toUnicode CMap: the last byte of the string incremented past 255.",
+          "java.lang.IllegalStateException: malformed PDF xref table",
+        ].join("\n"));
+      }
+
+      const normalizedPath = join(normalizedDir, `${attachment.docKey}.md`);
+      const manifestPath = join(manifestsDir, `${attachment.docKey}.json`);
+      mkdirSync(normalizedDir, { recursive: true });
+      mkdirSync(manifestsDir, { recursive: true });
+      writeFileSync(normalizedPath, "# Good Paper", "utf-8");
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          docKey: attachment.docKey,
+          itemKey: attachment.itemKey,
+          title: "Good Paper",
+          authors: ["Good Author"],
+          filePath: attachment.filePath,
+          normalizedPath,
+          blocks: [],
+        }),
+        "utf-8",
+      );
+      out.set(attachment.docKey, { normalizedPath, manifestPath });
+    }
+    return out;
+  };
+
+  const result = await runSync(
+    {
+      bibliographyJsonPath: bibliographyPath,
+      attachmentsRoot,
+      dataDir,
+    },
+    fakeFactory,
+    fakeExactFactory,
+    fakeExtractBatch,
+  );
+
+  assert.equal(result.stats.readyAttachments, 1);
+  assert.equal(result.stats.errorAttachments, 1);
+  assert.equal(result.stats.indexedAttachments, 1);
+  assert.equal(result.stats.updatedAttachments, 1);
+
+  const catalog = readCatalogFile(join(dataDir, "index", "catalog.json"));
+  const goodEntry = catalog.entries.find((entry) => entry.itemKey === "GOOD");
+  const badEntry = catalog.entries.find((entry) => entry.itemKey === "BAD");
+  assert.equal(goodEntry?.extractStatus, "ready");
+  assert.equal(badEntry?.extractStatus, "error");
+  assert.match(badEntry?.error || "", /PDF extraction failed/);
+  assert.match(badEntry?.error || "", /bad\.pdf/);
+  assert.match(badEntry?.error || "", /malformed PDF xref table/);
 });

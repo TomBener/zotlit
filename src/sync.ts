@@ -21,6 +21,7 @@ import { openExactIndex, type ExactIndexFactory } from "./tantivy.js";
 import type { AttachmentCatalogEntry, CatalogEntry, CatalogFile, SyncStats } from "./types.js";
 import {
   chunkArray,
+  compactHomePath,
   ensureDir,
   ensureParentDir,
   exists,
@@ -151,14 +152,22 @@ function groupForOdlBatches(attachments: AttachmentCatalogEntry[], maxBatchSize 
   return out;
 }
 
+type ExtractedPaths = { manifestPath: string; normalizedPath: string };
+type ExtractBatchFn = (
+  batch: AttachmentCatalogEntry[],
+  tempRoot: string,
+  manifestsDir: string,
+  normalizedDir: string,
+) => Promise<Map<string, ExtractedPaths>>;
+
 async function extractBatch(
   batch: AttachmentCatalogEntry[],
   tempRoot: string,
   manifestsDir: string,
   normalizedDir: string,
-): Promise<Map<string, { manifestPath: string; normalizedPath: string }>> {
+): Promise<Map<string, ExtractedPaths>> {
   const tempDir = mkdtempSync(join(tempRoot, "odl-"));
-  const byDocKey = new Map<string, { manifestPath: string; normalizedPath: string }>();
+  const byDocKey = new Map<string, ExtractedPaths>();
 
   try {
     await withHiddenJavaDockIcon(() =>
@@ -202,6 +211,32 @@ async function extractBatch(
   return byDocKey;
 }
 
+function summarizeSyncError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const normalized = raw.replace(/\r/g, "").replace(/\\n/g, "\n");
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const preferred = [...lines]
+    .reverse()
+    .find((line) =>
+      /(error|exception|failed|caused by)/i.test(line) &&
+      !/^warning:/i.test(line) &&
+      !/^info:/i.test(line) &&
+      !/^apr \d{2},/i.test(line),
+    );
+  const fallback = [...lines]
+    .reverse()
+    .find((line) => !/^picked up java_tool_options/i.test(line) && !/^apr \d{2},/i.test(line));
+  const candidate = preferred ?? fallback ?? raw.trim();
+  return candidate.replace(/\s+/g, " ").trim();
+}
+
+function toExtractErrorMessage(filePath: string, error: unknown): string {
+  return `PDF extraction failed for ${compactHomePath(filePath)}: ${summarizeSyncError(error)}`;
+}
+
 function buildContext(entry: CatalogEntry): string {
   const parts = [
     entry.title,
@@ -229,6 +264,7 @@ export async function runSync(
   overrides: ConfigOverrides = {},
   qmdFactory: QmdFactory = openQmdClient,
   exactFactory: ExactIndexFactory = openExactIndex,
+  extractBatchFn: ExtractBatchFn = extractBatch,
 ): Promise<{
   stats: SyncStats;
   config: ReturnType<typeof resolveConfig>;
@@ -327,30 +363,84 @@ export async function runSync(
     requireJava();
   }
 
+  async function recordReadyAttachment(
+    attachment: AttachmentCatalogEntry,
+    written: ExtractedPaths,
+  ): Promise<void> {
+    const current = statSync(attachment.filePath);
+    const sourceHash = await sha1File(attachment.filePath);
+
+    nextEntries.push(
+      toCatalogEntry(attachment, {
+        extractStatus: "ready",
+        size: current.size,
+        mtimeMs: Math.trunc(current.mtimeMs),
+        sourceHash,
+        lastIndexedAt: new Date().toISOString(),
+        normalizedPath: written.normalizedPath,
+        manifestPath: written.manifestPath,
+      }),
+    );
+    stats.readyAttachments += 1;
+    stats.updatedAttachments += 1;
+    stats.indexedAttachments += 1;
+  }
+
+  function recordErroredAttachment(attachment: AttachmentCatalogEntry, error: unknown): void {
+    const previous = previousByDocKey.get(attachment.docKey);
+    deleteIfExists(previous?.normalizedPath);
+    deleteIfExists(previous?.manifestPath);
+
+    const current = statSync(attachment.filePath, { throwIfNoEntry: false });
+    const message = toExtractErrorMessage(attachment.filePath, error);
+    logSyncPhase(`Sync: ${message}`);
+
+    nextEntries.push(
+      toCatalogEntry(attachment, {
+        extractStatus: "error",
+        size: current?.size ?? null,
+        mtimeMs: current ? Math.trunc(current.mtimeMs) : null,
+        sourceHash: null,
+        lastIndexedAt: null,
+        error: message,
+      }),
+    );
+  }
+
   for (const batch of groupForOdlBatches(changedAttachments)) {
-    const extracted = await extractBatch(batch, paths.tempDir, paths.manifestsDir, paths.normalizedDir);
-    for (const attachment of batch) {
-      const current = statSync(attachment.filePath);
-      const sourceHash = await sha1File(attachment.filePath);
-      const written = extracted.get(attachment.docKey);
-      if (!written) {
-        throw new Error(`Missing extracted output for ${attachment.filePath}`);
+    try {
+      const extracted = await extractBatchFn(batch, paths.tempDir, paths.manifestsDir, paths.normalizedDir);
+      for (const attachment of batch) {
+        const written = extracted.get(attachment.docKey);
+        if (!written) {
+          throw new Error(`Missing extracted output for ${attachment.filePath}`);
+        }
+        await recordReadyAttachment(attachment, written);
+      }
+    } catch (batchError) {
+      if (batch.length > 1) {
+        logSyncPhase("Sync: batch extraction failed, retrying files individually...");
+        for (const attachment of batch) {
+          try {
+            const extracted = await extractBatchFn(
+              [attachment],
+              paths.tempDir,
+              paths.manifestsDir,
+              paths.normalizedDir,
+            );
+            const written = extracted.get(attachment.docKey);
+            if (!written) {
+              throw new Error(`Missing extracted output for ${attachment.filePath}`);
+            }
+            await recordReadyAttachment(attachment, written);
+          } catch (singleError) {
+            recordErroredAttachment(attachment, singleError);
+          }
+        }
+        continue;
       }
 
-      nextEntries.push(
-        toCatalogEntry(attachment, {
-          extractStatus: "ready",
-          size: current.size,
-          mtimeMs: Math.trunc(current.mtimeMs),
-          sourceHash,
-          lastIndexedAt: new Date().toISOString(),
-          normalizedPath: written.normalizedPath,
-          manifestPath: written.manifestPath,
-        }),
-      );
-      stats.readyAttachments += 1;
-      stats.updatedAttachments += 1;
-      stats.indexedAttachments += 1;
+      recordErroredAttachment(batch[0]!, batchError);
     }
   }
 
