@@ -113,11 +113,81 @@ function firstString(value: string | string[] | undefined): string | undefined {
   return undefined;
 }
 
+function isWithinRoot(filePath: string, rootPath: string): boolean {
+  return filePath === rootPath || filePath.startsWith(`${rootPath}/`);
+}
+
+function splitPathSegments(filePath: string): string[] {
+  return normalizePathForLookup(filePath)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+}
+
+function findSegmentSequence(haystack: string[], needle: string[]): number {
+  if (needle.length === 0 || haystack.length < needle.length) return -1;
+
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    let matched = true;
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[start + offset] !== needle[offset]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return start;
+  }
+
+  return -1;
+}
+
+function relocateAttachmentPath(
+  filePath: string,
+  attachmentsRoot: string,
+): { absolutePath: string; relativePath: string } | undefined {
+  const normalizedPath = normalizePathForLookup(filePath);
+  const normalizedRoot = normalizePathForLookup(attachmentsRoot);
+
+  if (isWithinRoot(normalizedPath, normalizedRoot)) {
+    const relativePath = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/u, "");
+    if (!relativePath) return undefined;
+    return {
+      absolutePath: normalizedPath,
+      relativePath,
+    };
+  }
+
+  const rootSegments = splitPathSegments(normalizedRoot);
+  const fileSegments = splitPathSegments(normalizedPath);
+  let bestRelativeSegments: string[] | undefined;
+  let bestOverlapLength = 0;
+
+  for (let rootStart = 0; rootStart < rootSegments.length; rootStart += 1) {
+    const rootSuffix = rootSegments.slice(rootStart);
+    if (rootSuffix.length === 0 || rootSuffix.length < bestOverlapLength) continue;
+
+    const matchIndex = findSegmentSequence(fileSegments, rootSuffix);
+    if (matchIndex < 0) continue;
+
+    const relativeSegments = fileSegments.slice(matchIndex + rootSuffix.length);
+    if (relativeSegments.length === 0) continue;
+
+    bestRelativeSegments = relativeSegments;
+    bestOverlapLength = rootSuffix.length;
+  }
+
+  if (!bestRelativeSegments) return undefined;
+
+  const relativePath = bestRelativeSegments.join("/");
+  return {
+    absolutePath: `${normalizedRoot}/${relativePath}`,
+    relativePath,
+  };
+}
+
 export function loadCatalog(config: AppConfig): CatalogData {
   const rawItems = readBibliography(config.bibliographyJsonPath);
   const records: BibliographyRecord[] = [];
   const attachments: AttachmentCatalogEntry[] = [];
-  const normalizedRoot = normalizePathForLookup(config.attachmentsRoot);
 
   for (const item of rawItems) {
     const itemKey = (item["zotero-item-key"] || "").trim();
@@ -128,10 +198,21 @@ export function loadCatalog(config: AppConfig): CatalogData {
     const people = authors.names.length > 0 ? authors : editors;
     const title = (item.title || "").trim() || itemKey;
     const type = (item.type || "").trim() || undefined;
-    const attachmentPaths = splitFileField(item.file).filter((filePath) =>
-      filePath.startsWith(normalizedRoot),
-    );
-    const supportedPdfFiles = attachmentPaths.filter((filePath) => toSupportedFileType(filePath) === "pdf");
+    const resolvedAttachments = splitFileField(item.file).reduce<Array<{
+      absolutePath: string;
+      relativePath: string;
+    }>>((out, filePath) => {
+      const resolved = relocateAttachmentPath(filePath, config.attachmentsRoot);
+      if (!resolved || out.some((entry) => entry.relativePath === resolved.relativePath)) {
+        return out;
+      }
+      out.push(resolved);
+      return out;
+    }, []);
+    const attachmentPaths = resolvedAttachments.map((attachment) => attachment.absolutePath);
+    const supportedPdfFiles = resolvedAttachments
+      .map((attachment) => attachment.absolutePath)
+      .filter((filePath) => toSupportedFileType(filePath) === "pdf");
     const journal =
       type && JOURNAL_TYPES.has(type) ? firstString(item["container-title"]) : undefined;
     const publisher =
@@ -153,10 +234,11 @@ export function loadCatalog(config: AppConfig): CatalogData {
       hasSupportedPdf: supportedPdfFiles.length > 0,
     });
 
-    for (const filePath of attachmentPaths) {
+    for (const attachment of resolvedAttachments) {
+      const filePath = attachment.absolutePath;
       const fileExt = toSupportedFileType(filePath);
       attachments.push({
-        docKey: sha1(filePath),
+        docKey: sha1(attachment.relativePath),
         itemKey,
         citationKey: (item.id || "").trim() || undefined,
         title,

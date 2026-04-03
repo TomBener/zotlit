@@ -73,7 +73,7 @@ test("runSync skips unchanged ready pdfs and refreshes qmd contexts", async () =
   const pdfPath = join(attachmentsRoot, "papers", "paper.pdf");
   writeFileSync(pdfPath, "pdf");
   const currentStat = statSync(pdfPath);
-  const docKey = sha1(pdfPath);
+  const docKey = sha1("papers/paper.pdf");
   const normalizedPath = join(normalizedDir, `${docKey}.md`);
   const manifestPath = join(manifestsDir, `${docKey}.json`);
   writeFileSync(normalizedPath, "Body");
@@ -196,6 +196,141 @@ test("runSync skips unchanged ready pdfs and refreshes qmd contexts", async () =
   assert.equal(calls.removed, 1);
   assert.equal(calls.added, 1);
   assert.equal(calls.closed, 1);
+});
+
+test("runSync reuses a ready index when bibliography paths come from another machine", async () => {
+  const root = mkdtempSync(join(tmpdir(), "zotlit-sync-relocate-"));
+  const attachmentsRoot = join(root, "miniagent", "Zotero");
+  const bibliographyRoot = join(root, "rentao", "Zotero");
+  const dataDir = join(root, "data");
+  const indexDir = join(dataDir, "index");
+  const manifestsDir = join(dataDir, "manifests");
+  const normalizedDir = join(dataDir, "normalized");
+  mkdirSync(join(attachmentsRoot, "papers"), { recursive: true });
+  mkdirSync(indexDir, { recursive: true });
+  mkdirSync(manifestsDir, { recursive: true });
+  mkdirSync(normalizedDir, { recursive: true });
+
+  const pdfPath = join(attachmentsRoot, "papers", "paper.pdf");
+  writeFileSync(pdfPath, "pdf");
+  const currentStat = statSync(pdfPath);
+  const foreignPath = join(bibliographyRoot, "papers", "paper.pdf");
+  const docKey = sha1("papers/paper.pdf");
+  const normalizedPath = join(normalizedDir, `${docKey}.md`);
+  const manifestPath = join(manifestsDir, `${docKey}.json`);
+  writeFileSync(normalizedPath, "Body");
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      docKey,
+      itemKey: "ITEM1",
+      title: "Paper",
+      authors: ["A"],
+      filePath: foreignPath,
+      normalizedPath,
+      blocks: [],
+    }),
+    "utf-8",
+  );
+
+  const bibliographyPath = join(root, "bibliography.json");
+  writeFileSync(
+    bibliographyPath,
+    JSON.stringify([
+      {
+        id: "cite",
+        title: "Paper",
+        author: [{ family: "A", given: "Author" }],
+        file: foreignPath,
+        "zotero-item-key": "ITEM1",
+      },
+    ]),
+    "utf-8",
+  );
+
+  const previousCatalog: CatalogFile = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    entries: [
+      {
+        docKey,
+        itemKey: "ITEM1",
+        citationKey: "cite",
+        title: "Paper",
+        authors: ["A Author"],
+        filePath: foreignPath,
+        fileExt: "pdf",
+        exists: true,
+        supported: true,
+        extractStatus: "ready",
+        size: currentStat.size,
+        mtimeMs: Math.trunc(currentStat.mtimeMs),
+        sourceHash: "existinghash",
+        lastIndexedAt: new Date().toISOString(),
+        normalizedPath,
+        manifestPath,
+      },
+    ],
+  };
+  writeCatalogFile(join(indexDir, "catalog.json"), previousCatalog);
+
+  const calls = {
+    update: 0,
+    embed: 0,
+    removed: 0,
+    added: 0,
+  };
+
+  const fakeFactory = async () => ({
+    search: async () => [],
+    searchLex: async () => [],
+    update: async () => {
+      calls.update += 1;
+      return {};
+    },
+    embed: async () => {
+      calls.embed += 1;
+      return {};
+    },
+    getStatus: async () => ({ documents: 1, collections: [], embeddings: { total: 1, stale: 0 } }),
+    listContexts: async () => [{ collection: "library", path: "/old.md", context: "old" }],
+    addContext: async () => {
+      calls.added += 1;
+      return true;
+    },
+    removeContext: async () => {
+      calls.removed += 1;
+      return true;
+    },
+    close: async () => {},
+  });
+  const fakeExactFactory = async () => ({
+    rebuildExactIndex: async () => {},
+    searchExactCandidates: async () => [],
+    close: async () => {},
+  });
+
+  const result = await runSync(
+    {
+      bibliographyJsonPath: bibliographyPath,
+      attachmentsRoot,
+      dataDir,
+    },
+    fakeFactory,
+    fakeExactFactory,
+  );
+
+  assert.equal(result.stats.skippedAttachments, 1);
+  assert.equal(result.stats.updatedAttachments, 0);
+  assert.equal(result.stats.readyAttachments, 1);
+  assert.equal(calls.update, 1);
+  assert.equal(calls.embed, 1);
+  assert.equal(calls.removed, 1);
+  assert.equal(calls.added, 1);
+
+  const nextCatalog = readCatalogFile(join(indexDir, "catalog.json"));
+  assert.equal(nextCatalog.entries[0]?.filePath, pdfPath);
+  assert.equal(nextCatalog.entries[0]?.docKey, docKey);
 });
 
 test("runSync removes stale normalized and manifest files when attachment disappears", async () => {

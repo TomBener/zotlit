@@ -97,6 +97,7 @@ Fallback environment variable names:
 `semanticScholarApiKey` is only needed for `zotlit s2` and `zotlit add --s2-paper-id`.
 `zoteroCollectionKey` is optional and sets the default collection for new items created by `add`.
 `zoteroLibraryType` supports both `user` and `group`.
+`sync` treats bibliography attachment paths as relocatable under `attachmentsRoot`, so a bibliography exported on another machine still matches local PDFs when the relative path under the Zotero root is the same.
 
 ## Commands
 
