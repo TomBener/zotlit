@@ -18,7 +18,7 @@ import { buildPdfManifest } from "./manifest.js";
 import { openQmdClient, type QmdFactory } from "./qmd.js";
 import { mapEntriesByDocKey, readCatalogFile, summarizeCatalog, writeCatalogFile } from "./state.js";
 import { openExactIndex, type ExactIndexFactory } from "./tantivy.js";
-import type { AttachmentCatalogEntry, CatalogEntry, CatalogFile, SyncStats } from "./types.js";
+import type { AttachmentCatalogEntry, AttachmentManifest, CatalogEntry, CatalogFile, SyncStats } from "./types.js";
 import {
   chunkArray,
   compactHomePath,
@@ -130,6 +130,29 @@ function deleteIfExists(path: string | undefined): void {
   if (path && exists(path)) {
     unlinkSync(path);
   }
+}
+
+function tryReadManifest(path: string): AttachmentManifest | undefined {
+  if (!exists(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as AttachmentManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasReusableArtifacts(
+  attachment: AttachmentCatalogEntry,
+  normalizedPath: string | undefined,
+  manifestPath: string | undefined,
+): normalizedPath is string {
+  if (!normalizedPath || !manifestPath) return false;
+  if (!exists(normalizedPath) || !exists(manifestPath)) return false;
+
+  const manifest = tryReadManifest(manifestPath);
+  if (!manifest) return false;
+
+  return manifest.docKey === attachment.docKey && manifest.itemKey === attachment.itemKey;
 }
 
 function groupForOdlBatches(attachments: AttachmentCatalogEntry[], maxBatchSize = 8): AttachmentCatalogEntry[][] {
@@ -326,20 +349,21 @@ export async function runSync(
     }
 
     const previous = previousByDocKey.get(attachment.docKey);
-    const hasIndexedArtifacts =
+    const fallbackNormalizedPath = resolve(paths.normalizedDir, `${attachment.docKey}.md`);
+    const fallbackManifestPath = resolve(paths.manifestsDir, `${attachment.docKey}.json`);
+    const currentMtimeMs = Math.trunc(current.mtimeMs);
+    const previousIsReadyAndUnchanged =
       previous?.extractStatus === "ready" &&
-      !!previous.manifestPath &&
-      !!previous.normalizedPath &&
-      exists(previous.manifestPath) &&
-      exists(previous.normalizedPath);
-    const needsExtract =
-      !previous ||
-      previous.extractStatus !== "ready" ||
-      previous.size !== current.size ||
-      previous.mtimeMs !== Math.trunc(current.mtimeMs) ||
-      !hasIndexedArtifacts;
+      previous.size === current.size &&
+      previous.mtimeMs === currentMtimeMs &&
+      hasReusableArtifacts(attachment, previous.normalizedPath, previous.manifestPath);
+    const fallbackArtifactsReusable = hasReusableArtifacts(
+      attachment,
+      fallbackNormalizedPath,
+      fallbackManifestPath,
+    );
 
-    if (needsExtract) {
+    if (!previousIsReadyAndUnchanged && !fallbackArtifactsReusable) {
       changedAttachments.push(attachment);
       continue;
     }
@@ -348,11 +372,11 @@ export async function runSync(
       toCatalogEntry(attachment, {
         extractStatus: "ready",
         size: current.size,
-        mtimeMs: Math.trunc(current.mtimeMs),
-        sourceHash: previous.sourceHash ?? null,
-        lastIndexedAt: previous.lastIndexedAt ?? null,
-        normalizedPath: previous.normalizedPath,
-        manifestPath: previous.manifestPath,
+        mtimeMs: currentMtimeMs,
+        sourceHash: previousIsReadyAndUnchanged ? previous.sourceHash ?? null : null,
+        lastIndexedAt: previousIsReadyAndUnchanged ? previous.lastIndexedAt ?? null : null,
+        normalizedPath: previousIsReadyAndUnchanged ? previous.normalizedPath : fallbackNormalizedPath,
+        manifestPath: previousIsReadyAndUnchanged ? previous.manifestPath : fallbackManifestPath,
       }),
     );
     stats.readyAttachments += 1;

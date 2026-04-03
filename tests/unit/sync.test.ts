@@ -198,6 +198,103 @@ test("runSync skips unchanged ready pdfs and refreshes qmd contexts", async () =
   assert.equal(calls.closed, 1);
 });
 
+test("runSync resumes from existing normalized and manifest outputs when catalog state is missing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "zotlit-sync-resume-"));
+  const attachmentsRoot = join(root, "attachments");
+  const dataDir = join(root, "data");
+  const indexDir = join(dataDir, "index");
+  const manifestsDir = join(dataDir, "manifests");
+  const normalizedDir = join(dataDir, "normalized");
+  mkdirSync(join(attachmentsRoot, "papers"), { recursive: true });
+  mkdirSync(indexDir, { recursive: true });
+  mkdirSync(manifestsDir, { recursive: true });
+  mkdirSync(normalizedDir, { recursive: true });
+
+  const pdfPath = join(attachmentsRoot, "papers", "paper.pdf");
+  writeFileSync(pdfPath, "pdf");
+  const docKey = sha1("papers/paper.pdf");
+  const normalizedPath = join(normalizedDir, `${docKey}.md`);
+  const manifestPath = join(manifestsDir, `${docKey}.json`);
+  writeFileSync(normalizedPath, "Body", "utf-8");
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      docKey,
+      itemKey: "ITEM1",
+      title: "Paper",
+      authors: ["A Author"],
+      filePath: pdfPath,
+      normalizedPath,
+      blocks: [],
+    }),
+    "utf-8",
+  );
+
+  const bibliographyPath = join(root, "bibliography.json");
+  writeFileSync(
+    bibliographyPath,
+    JSON.stringify([
+      {
+        id: "cite",
+        title: "Paper",
+        author: [{ family: "A", given: "Author" }],
+        file: pdfPath,
+        "zotero-item-key": "ITEM1",
+      },
+    ]),
+    "utf-8",
+  );
+
+  writeCatalogFile(join(indexDir, "catalog.json"), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    entries: [],
+  });
+
+  let extractCalls = 0;
+  const fakeFactory = async () => ({
+    search: async () => [],
+    searchLex: async () => [],
+    update: async () => ({}),
+    embed: async () => ({}),
+    getStatus: async () => ({ documents: 1, collections: [], embeddings: { total: 1, stale: 0 } }),
+    listContexts: async () => [],
+    addContext: async () => true,
+    removeContext: async () => true,
+    close: async () => {},
+  });
+  const fakeExactFactory = async () => ({
+    rebuildExactIndex: async () => {},
+    searchExactCandidates: async () => [],
+    close: async () => {},
+  });
+  const fakeExtractBatch = async () => {
+    extractCalls += 1;
+    return new Map();
+  };
+
+  const result = await runSync(
+    {
+      bibliographyJsonPath: bibliographyPath,
+      attachmentsRoot,
+      dataDir,
+    },
+    fakeFactory,
+    fakeExactFactory,
+    fakeExtractBatch,
+  );
+
+  assert.equal(extractCalls, 0);
+  assert.equal(result.stats.skippedAttachments, 1);
+  assert.equal(result.stats.updatedAttachments, 0);
+  assert.equal(result.stats.readyAttachments, 1);
+
+  const nextCatalog = readCatalogFile(join(indexDir, "catalog.json"));
+  assert.equal(nextCatalog.entries[0]?.extractStatus, "ready");
+  assert.equal(nextCatalog.entries[0]?.normalizedPath, normalizedPath);
+  assert.equal(nextCatalog.entries[0]?.manifestPath, manifestPath);
+});
+
 test("runSync reuses a ready index when bibliography paths come from another machine", async () => {
   const root = mkdtempSync(join(tmpdir(), "zotlit-sync-relocate-"));
   const attachmentsRoot = join(root, "miniagent", "Zotero");
