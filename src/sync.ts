@@ -270,6 +270,15 @@ function buildContext(entry: CatalogEntry): string {
   return parts.join("\n");
 }
 
+function writeProgressCatalog(path: string, entries: CatalogEntry[]): void {
+  const snapshot: CatalogFile = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    entries: [...entries].sort((a, b) => a.filePath.localeCompare(b.filePath)),
+  };
+  writeCatalogFile(path, snapshot);
+}
+
 async function syncQmdContexts(qmd: Awaited<ReturnType<QmdFactory>>, readyEntries: CatalogEntry[]): Promise<void> {
   const existing = await qmd.listContexts();
   for (const row of existing) {
@@ -461,11 +470,12 @@ export async function runSync(
             recordErroredAttachment(attachment, singleError);
           }
         }
-        continue;
+      } else {
+        recordErroredAttachment(batch[0]!, batchError);
       }
-
-      recordErroredAttachment(batch[0]!, batchError);
     }
+
+    writeProgressCatalog(paths.catalogPath, nextEntries);
   }
 
   for (const docKey of staleDocKeys) {
@@ -481,7 +491,7 @@ export async function runSync(
     generatedAt: new Date().toISOString(),
     entries: nextEntries,
   };
-  writeCatalogFile(paths.catalogPath, nextCatalog);
+  writeProgressCatalog(paths.catalogPath, nextEntries);
 
   const readyEntries = nextEntries.filter((entry) => entry.extractStatus === "ready");
   const exactIndex = await exactFactory(config);
