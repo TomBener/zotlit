@@ -1,4 +1,4 @@
-import { convert } from "@opendataloader/pdf";
+import { buildArgs, type ConvertOptions } from "@opendataloader/pdf";
 import {
   mkdtempSync,
   readFileSync,
@@ -9,8 +9,9 @@ import {
 } from "node:fs";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { join, resolve, dirname } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 import { loadCatalog } from "./catalog.js";
 import { getDataPaths, resolveConfig, type ConfigOverrides } from "./config.js";
@@ -29,6 +30,14 @@ import {
 } from "./utils.js";
 
 const HIDE_JAVA_DOCK_ICON_FLAG = "-Dapple.awt.UIElement=true";
+const ODL_JAR_NAME = "opendataloader-pdf-cli.jar";
+const ODL_SINGLE_PDF_TIMEOUT_MS = 180_000;
+const ODL_EXTRA_BATCH_TIMEOUT_MS = 30_000;
+const ODL_FORCE_KILL_GRACE_MS = 1_000;
+
+const require = createRequire(import.meta.url);
+const ODL_PACKAGE_ENTRY = require.resolve("@opendataloader/pdf");
+const ODL_JAR_PATH = resolve(dirname(ODL_PACKAGE_ENTRY), "..", "lib", ODL_JAR_NAME);
 
 function logSyncPhase(message: string): void {
   if (process.stderr.isTTY) {
@@ -96,6 +105,114 @@ export async function withHiddenJavaDockIcon<T>(
       env.JAVA_TOOL_OPTIONS = previous;
     }
   }
+}
+
+type RunProcessWithTimeoutOptions = {
+  command: string;
+  args: string[];
+  timeoutMs: number;
+  label?: string;
+  env?: NodeJS.ProcessEnv;
+  streamOutput?: boolean;
+  spawnImpl?: typeof spawn;
+};
+
+export async function runProcessWithTimeout({
+  command,
+  args,
+  timeoutMs,
+  label,
+  env,
+  streamOutput = false,
+  spawnImpl = spawn,
+}: RunProcessWithTimeoutOptions): Promise<string> {
+  const processLabel = label ?? command;
+
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawnImpl(command, args, {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+
+    const forceKill = setTimeout(() => {
+      if (timedOut && child.exitCode === null) {
+        child.kill("SIGKILL");
+      }
+    }, timeoutMs + ODL_FORCE_KILL_GRACE_MS);
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+
+    function cleanup(): void {
+      clearTimeout(timeout);
+      clearTimeout(forceKill);
+    }
+
+    function rejectOnce(error: Error): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    }
+
+    function resolveOnce(value: string): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolvePromise(value);
+    }
+
+    child.stdout.on("data", (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      if (streamOutput) process.stdout.write(chunk);
+    });
+
+    child.stderr.on("data", (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+      if (streamOutput) process.stderr.write(chunk);
+    });
+
+    child.on("error", (error) => {
+      if (error.message.includes("ENOENT")) {
+        rejectOnce(new Error(`'${command}' command not found. Please ensure it is installed and in PATH.`));
+        return;
+      }
+      rejectOnce(error);
+    });
+
+    child.on("close", (code, signal) => {
+      const errorOutput = (stderr || stdout).trim();
+
+      if (timedOut) {
+        const suffix = errorOutput.length > 0 ? `\n\n${errorOutput}` : "";
+        rejectOnce(new Error(`${processLabel} timed out after ${timeoutMs}ms.${suffix}`));
+        return;
+      }
+
+      if (code === 0) {
+        resolveOnce(stdout);
+        return;
+      }
+
+      if (signal) {
+        const suffix = errorOutput.length > 0 ? `\n\n${errorOutput}` : "";
+        rejectOnce(new Error(`${processLabel} was terminated by signal ${signal}.${suffix}`));
+        return;
+      }
+
+      const suffix = errorOutput.length > 0 ? `\n\n${errorOutput}` : "";
+      rejectOnce(new Error(`${processLabel} exited with code ${code}.${suffix}`));
+    });
+  });
 }
 
 function toCatalogEntry(
@@ -175,6 +292,44 @@ function groupForOdlBatches(attachments: AttachmentCatalogEntry[], maxBatchSize 
   return out;
 }
 
+function getOdlTimeoutMs(batchSize: number): number {
+  return ODL_SINGLE_PDF_TIMEOUT_MS + Math.max(0, batchSize - 1) * ODL_EXTRA_BATCH_TIMEOUT_MS;
+}
+
+export async function runOdlConvert(
+  inputPaths: string[],
+  options: ConvertOptions,
+  executionOptions: {
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+    spawnImpl?: typeof spawn;
+  } = {},
+): Promise<string> {
+  if (inputPaths.length === 0) {
+    throw new Error("At least one input path must be provided.");
+  }
+
+  for (const inputPath of inputPaths) {
+    if (!exists(inputPath)) {
+      throw new Error(`Input file or folder not found: ${inputPath}`);
+    }
+  }
+
+  if (!exists(ODL_JAR_PATH)) {
+    throw new Error(`OpenDataLoader JAR not found at ${ODL_JAR_PATH}`);
+  }
+
+  return await runProcessWithTimeout({
+    command: "java",
+    args: ["-jar", ODL_JAR_PATH, ...inputPaths, ...buildArgs(options)],
+    timeoutMs: executionOptions.timeoutMs ?? getOdlTimeoutMs(inputPaths.length),
+    label: "OpenDataLoader PDF extraction",
+    env: executionOptions.env,
+    streamOutput: !options.quiet,
+    spawnImpl: executionOptions.spawnImpl,
+  });
+}
+
 type ExtractedPaths = { manifestPath: string; normalizedPath: string };
 type ExtractBatchFn = (
   batch: AttachmentCatalogEntry[],
@@ -194,13 +349,10 @@ async function extractBatch(
 
   try {
     await withHiddenJavaDockIcon(() =>
-      convert(
-        batch.map((attachment) => attachment.filePath),
-        {
-          outputDir: tempDir,
-          format: "markdown,json",
-        },
-      ),
+      runOdlConvert(batch.map((attachment) => attachment.filePath), {
+        outputDir: tempDir,
+        format: "markdown,json",
+      }),
     );
 
     for (const attachment of batch) {
@@ -244,7 +396,7 @@ function summarizeSyncError(error: unknown): string {
   const preferred = [...lines]
     .reverse()
     .find((line) =>
-      /(error|exception|failed|caused by)/i.test(line) &&
+      /(error|exception|failed|caused by|timed out)/i.test(line) &&
       !/^warning:/i.test(line) &&
       !/^info:/i.test(line) &&
       !/^apr \d{2},/i.test(line),

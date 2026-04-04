@@ -4,7 +4,12 @@ import { existsSync, mkdtempSync, mkdirSync, statSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildHiddenJavaToolOptions, runSync, withHiddenJavaDockIcon } from "../../src/sync.js";
+import {
+  buildHiddenJavaToolOptions,
+  runProcessWithTimeout,
+  runSync,
+  withHiddenJavaDockIcon,
+} from "../../src/sync.js";
 import { readCatalogFile, writeCatalogFile } from "../../src/state.js";
 import type { CatalogFile } from "../../src/types.js";
 import { sha1 } from "../../src/utils.js";
@@ -56,6 +61,22 @@ test("withHiddenJavaDockIcon only applies on macOS and restores environment afte
   );
   assert.equal(seenDuringTask, "-Xmx1g");
   assert.equal(env.JAVA_TOOL_OPTIONS, "-Xmx1g");
+});
+
+test("runProcessWithTimeout terminates a hung child process", async () => {
+  await assert.rejects(
+    runProcessWithTimeout({
+      command: process.execPath,
+      args: ["-e", "process.stderr.write('still running\\n'); setInterval(() => {}, 1000);"],
+      timeoutMs: 50,
+      label: "test process",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /test process timed out after 50ms/);
+      return true;
+    },
+  );
 });
 
 test("runSync skips unchanged ready pdfs and refreshes qmd contexts", async () => {
@@ -616,4 +637,113 @@ test("runSync records extraction failures per attachment and continues indexing 
   assert.match(badEntry?.error || "", /PDF extraction failed/);
   assert.match(badEntry?.error || "", /bad\.pdf/);
   assert.match(badEntry?.error || "", /malformed PDF xref table/);
+});
+
+test("runSync retries a timed out batch one file at a time", async () => {
+  const root = mkdtempSync(join(tmpdir(), "zotlit-sync-timeout-"));
+  const attachmentsRoot = join(root, "attachments");
+  const dataDir = join(root, "data");
+  const manifestsDir = join(dataDir, "manifests");
+  const normalizedDir = join(dataDir, "normalized");
+  mkdirSync(attachmentsRoot, { recursive: true });
+
+  const goodPdfPath = join(attachmentsRoot, "good.pdf");
+  const badPdfPath = join(attachmentsRoot, "bad.pdf");
+  writeFileSync(goodPdfPath, "good");
+  writeFileSync(badPdfPath, "bad");
+
+  const bibliographyPath = join(root, "bibliography.json");
+  writeFileSync(
+    bibliographyPath,
+    JSON.stringify([
+      {
+        id: "good-cite",
+        title: "Good Paper",
+        author: [{ family: "Good", given: "Author" }],
+        file: goodPdfPath,
+        "zotero-item-key": "GOOD",
+      },
+      {
+        id: "bad-cite",
+        title: "Bad Paper",
+        author: [{ family: "Bad", given: "Author" }],
+        file: badPdfPath,
+        "zotero-item-key": "BAD",
+      },
+    ]),
+    "utf-8",
+  );
+
+  const fakeFactory = async () => ({
+    search: async () => [],
+    searchLex: async () => [],
+    update: async () => ({}),
+    embed: async () => ({}),
+    getStatus: async () => ({ documents: 1, collections: [], embeddings: { total: 1, stale: 0 } }),
+    listContexts: async () => [],
+    addContext: async () => true,
+    removeContext: async () => true,
+    close: async () => {},
+  });
+  const fakeExactFactory = async () => ({
+    rebuildExactIndex: async () => {},
+    searchExactCandidates: async () => [],
+    close: async () => {},
+  });
+
+  let batchCalls = 0;
+  const fakeExtractBatch = async (batch: Array<{ docKey: string; filePath: string; itemKey: string }>) => {
+    batchCalls += 1;
+    if (batch.length > 1) {
+      throw new Error("OpenDataLoader PDF extraction timed out after 180000ms.");
+    }
+
+    const attachment = batch[0]!;
+    if (attachment.itemKey === "BAD") {
+      throw new Error("OpenDataLoader PDF extraction timed out after 180000ms.");
+    }
+
+    const normalizedPath = join(normalizedDir, `${attachment.docKey}.md`);
+    const manifestPath = join(manifestsDir, `${attachment.docKey}.json`);
+    mkdirSync(normalizedDir, { recursive: true });
+    mkdirSync(manifestsDir, { recursive: true });
+    writeFileSync(normalizedPath, "# Good Paper", "utf-8");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        docKey: attachment.docKey,
+        itemKey: attachment.itemKey,
+        title: "Good Paper",
+        authors: ["Good Author"],
+        filePath: attachment.filePath,
+        normalizedPath,
+        blocks: [],
+      }),
+      "utf-8",
+    );
+
+    return new Map([[attachment.docKey, { normalizedPath, manifestPath }]]);
+  };
+
+  const result = await runSync(
+    {
+      bibliographyJsonPath: bibliographyPath,
+      attachmentsRoot,
+      dataDir,
+    },
+    fakeFactory,
+    fakeExactFactory,
+    fakeExtractBatch,
+  );
+
+  assert.equal(batchCalls, 3);
+  assert.equal(result.stats.readyAttachments, 1);
+  assert.equal(result.stats.errorAttachments, 1);
+
+  const catalog = readCatalogFile(join(dataDir, "index", "catalog.json"));
+  const goodEntry = catalog.entries.find((entry) => entry.itemKey === "GOOD");
+  const badEntry = catalog.entries.find((entry) => entry.itemKey === "BAD");
+  assert.equal(goodEntry?.extractStatus, "ready");
+  assert.equal(badEntry?.extractStatus, "error");
+  assert.match(badEntry?.error || "", /timed out after 180000ms/);
 });

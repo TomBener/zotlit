@@ -44,6 +44,7 @@ Current scope:
 Notes:
 
 - `sync` uses Java during PDF extraction
+- `sync` skips PDFs that time out or fail extraction, records them as `error`, and continues the rest of the batch
 - qmd may prepare local models on first use
 
 ## Install
