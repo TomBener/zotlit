@@ -249,7 +249,42 @@ type RunProcessWithTimeoutOptions = {
   env?: NodeJS.ProcessEnv;
   streamOutput?: boolean;
   spawnImpl?: typeof spawn;
+  maxBufferedOutputBytes?: number;
 };
+
+const DEFAULT_MAX_BUFFERED_OUTPUT_BYTES = 256 * 1024;
+
+function appendCappedOutput(
+  current: string,
+  chunk: string,
+  maxBufferedOutputBytes: number,
+): { text: string; truncatedBytes: number } {
+  const next = current + chunk;
+  const nextBytes = Buffer.byteLength(next);
+  if (nextBytes <= maxBufferedOutputBytes) {
+    return { text: next, truncatedBytes: 0 };
+  }
+
+  const overflowBytes = nextBytes - maxBufferedOutputBytes;
+  let dropChars = 0;
+  let droppedBytes = 0;
+  while (dropChars < next.length && droppedBytes < overflowBytes) {
+    dropChars += 1;
+    droppedBytes = Buffer.byteLength(next.slice(0, dropChars));
+  }
+
+  return {
+    text: next.slice(dropChars),
+    truncatedBytes: droppedBytes,
+  };
+}
+
+function formatBufferedOutput(text: string, truncatedBytes: number): string {
+  if (truncatedBytes <= 0) {
+    return text;
+  }
+  return `[truncated ${truncatedBytes} earlier bytes]\n${text}`;
+}
 
 export async function runProcessWithTimeout({
   command,
@@ -259,6 +294,7 @@ export async function runProcessWithTimeout({
   env,
   streamOutput = false,
   spawnImpl = spawn,
+  maxBufferedOutputBytes = DEFAULT_MAX_BUFFERED_OUTPUT_BYTES,
 }: RunProcessWithTimeoutOptions): Promise<string> {
   const processLabel = label ?? command;
 
@@ -270,6 +306,8 @@ export async function runProcessWithTimeout({
 
     let stdout = "";
     let stderr = "";
+    let truncatedStdoutBytes = 0;
+    let truncatedStderrBytes = 0;
     let settled = false;
     let timedOut = false;
 
@@ -305,13 +343,17 @@ export async function runProcessWithTimeout({
 
     child.stdout.on("data", (data) => {
       const chunk = data.toString();
-      stdout += chunk;
+      const next = appendCappedOutput(stdout, chunk, maxBufferedOutputBytes);
+      stdout = next.text;
+      truncatedStdoutBytes += next.truncatedBytes;
       if (streamOutput) process.stdout.write(chunk);
     });
 
     child.stderr.on("data", (data) => {
       const chunk = data.toString();
-      stderr += chunk;
+      const next = appendCappedOutput(stderr, chunk, maxBufferedOutputBytes);
+      stderr = next.text;
+      truncatedStderrBytes += next.truncatedBytes;
       if (streamOutput) process.stderr.write(chunk);
     });
 
@@ -324,7 +366,11 @@ export async function runProcessWithTimeout({
     });
 
     child.on("close", (code, signal) => {
-      const errorOutput = (stderr || stdout).trim();
+      const errorOutput = (
+        stderr.length > 0
+          ? formatBufferedOutput(stderr, truncatedStderrBytes)
+          : formatBufferedOutput(stdout, truncatedStdoutBytes)
+      ).trim();
 
       if (timedOut) {
         const suffix = errorOutput.length > 0 ? `\n\n${errorOutput}` : "";
@@ -333,7 +379,7 @@ export async function runProcessWithTimeout({
       }
 
       if (code === 0) {
-        resolveOnce(stdout);
+        resolveOnce(formatBufferedOutput(stdout, truncatedStdoutBytes));
         return;
       }
 

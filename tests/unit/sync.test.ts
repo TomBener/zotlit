@@ -79,6 +79,32 @@ test("runProcessWithTimeout terminates a hung child process", async () => {
   );
 });
 
+test("runProcessWithTimeout keeps only the tail of oversized child output", async () => {
+  await assert.rejects(
+    runProcessWithTimeout({
+      command: process.execPath,
+      args: [
+        "-e",
+        [
+          "process.stderr.write('A'.repeat(300000));",
+          "process.stderr.write('tail-marker\\n', () => process.exit(1));",
+        ].join(" "),
+      ],
+      timeoutMs: 5_000,
+      label: "noisy process",
+      maxBufferedOutputBytes: 4096,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /noisy process exited with code 1/);
+      assert.match(error.message, /\[truncated \d+ earlier bytes\]/);
+      assert.match(error.message, /tail-marker/);
+      assert.doesNotMatch(error.message, /^A{1000}/);
+      return true;
+    },
+  );
+});
+
 test("runSync skips unchanged ready pdfs and refreshes qmd contexts", async () => {
   const root = mkdtempSync(join(tmpdir(), "zotlit-sync-"));
   const attachmentsRoot = join(root, "attachments");
