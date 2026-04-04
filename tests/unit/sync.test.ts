@@ -652,6 +652,7 @@ test("runSync records extraction failures per attachment and continues indexing 
     fakeFactory,
     fakeExactFactory,
     fakeExtractBatch,
+    () => {},
   );
 
   assert.equal(result.stats.readyAttachments, 1);
@@ -775,6 +776,7 @@ test("runSync retries a timed out batch one file at a time", async () => {
     fakeFactory,
     fakeExactFactory,
     fakeExtractBatch,
+    () => {},
   );
 
   assert.equal(batchCalls, 3);

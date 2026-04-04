@@ -58,6 +58,22 @@ function formatLogSectionTitle(title: string): string {
   return `\n## ${title}\n`;
 }
 
+type SyncRunStatus = "starting" | "running" | "completed" | "failed";
+
+type SyncRunProgressSnapshot = {
+  status: SyncRunStatus;
+  batchIndex?: number;
+  batchCount?: number;
+  currentFilePath?: string;
+  processedAttachments?: number;
+  readyAttachments?: number;
+  errorAttachments?: number;
+  missingAttachments?: number;
+  unsupportedAttachments?: number;
+  skippedAttachments?: number;
+  note?: string;
+};
+
 type SyncFileOutcomeKind = "skipped" | "error" | "missing" | "unsupported";
 
 type SyncFileOutcome = {
@@ -131,6 +147,23 @@ class SyncLogger {
   detail(title: string, content: string): void {
     this.append(formatLogSectionTitle(title));
     this.append(`${content.trimEnd()}\n`);
+  }
+
+  progress(snapshot: SyncRunProgressSnapshot): void {
+    const fields = [
+      `status=${snapshot.status}`,
+      snapshot.batchIndex !== undefined ? `batch=${snapshot.batchIndex}` : undefined,
+      snapshot.batchCount !== undefined ? `batchCount=${snapshot.batchCount}` : undefined,
+      snapshot.processedAttachments !== undefined ? `processed=${snapshot.processedAttachments}` : undefined,
+      snapshot.readyAttachments !== undefined ? `ready=${snapshot.readyAttachments}` : undefined,
+      snapshot.errorAttachments !== undefined ? `errors=${snapshot.errorAttachments}` : undefined,
+      snapshot.missingAttachments !== undefined ? `missing=${snapshot.missingAttachments}` : undefined,
+      snapshot.unsupportedAttachments !== undefined ? `unsupported=${snapshot.unsupportedAttachments}` : undefined,
+      snapshot.skippedAttachments !== undefined ? `skipped=${snapshot.skippedAttachments}` : undefined,
+      snapshot.currentFilePath ? `file=${compactHomePath(snapshot.currentFilePath)}` : undefined,
+      snapshot.note ? `note=${snapshot.note}` : undefined,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
+    this.append(`[${formatLogTimestamp()}] PROGRESS ${fields.join(" ")}\n`);
   }
 
   private writeFileListSection(title: string, items: SyncFileOutcome[]): void {
@@ -629,6 +662,7 @@ export async function runSync(
   qmdFactory: QmdFactory = openQmdClient,
   exactFactory: ExactIndexFactory = openExactIndex,
   extractBatchFn: ExtractBatchFn = extractBatch,
+  requireJavaFn: () => void = requireJava,
 ): Promise<{
   stats: SyncStats;
   config: ReturnType<typeof resolveConfig>;
@@ -637,6 +671,76 @@ export async function runSync(
   const config = resolveConfig(overrides);
   const paths = getDataPaths(config.dataDir);
   const logger = new SyncLogger(paths, config, new Date());
+  let finalStatusWritten = false;
+  let latestProgress: SyncRunProgressSnapshot = { status: "starting", note: "sync initialized" };
+
+  const writeProgress = (partial: Partial<SyncRunProgressSnapshot> = {}): void => {
+    latestProgress = {
+      ...latestProgress,
+      ...partial,
+    };
+    logger.progress(latestProgress);
+  };
+
+  const finalizeOnce = (status: "ok" | "failed", outcomes: SyncFileOutcome[], stats?: SyncStats): void => {
+    if (finalStatusWritten) return;
+    finalStatusWritten = true;
+    logger.finalize(status, outcomes, stats);
+  };
+
+  const signalNames = ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const;
+  const signalHandlers = new Map<string, () => void>();
+  let removedLifecycleHooks = false;
+
+  const removeLifecycleHooks = (): void => {
+    if (removedLifecycleHooks) return;
+    removedLifecycleHooks = true;
+    process.off("uncaughtException", onUncaughtException);
+    process.off("unhandledRejection", onUnhandledRejection);
+    process.off("beforeExit", onBeforeExit);
+    process.off("exit", onExit);
+    for (const [signal, handler] of signalHandlers.entries()) {
+      process.off(signal, handler);
+    }
+    signalHandlers.clear();
+  };
+
+  const onUncaughtException = (error: Error): void => {
+    logger.error(`uncaughtException: ${summarizeSyncError(error)}`);
+    logger.detail("uncaughtException", error.stack ?? error.message);
+    writeProgress({ status: "failed", note: `uncaughtException: ${summarizeSyncError(error)}` });
+  };
+
+  const onUnhandledRejection = (reason: unknown): void => {
+    const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    logger.error(`unhandledRejection: ${summarizeSyncError(reason)}`);
+    logger.detail("unhandledRejection", detail);
+    writeProgress({ status: "failed", note: `unhandledRejection: ${summarizeSyncError(reason)}` });
+  };
+
+  const onBeforeExit = (code: number): void => {
+    writeProgress({ note: `beforeExit code=${code}` });
+    logger.info(`Process beforeExit with code ${code}.`);
+  };
+
+  const onExit = (code: number): void => {
+    const status = code === 0 ? "completed" : "failed";
+    writeProgress({ status, note: `process exit code=${code}` });
+    logger.info(`Process exit with code ${code}.`);
+  };
+
+  process.on("uncaughtException", onUncaughtException);
+  process.on("unhandledRejection", onUnhandledRejection);
+  process.on("beforeExit", onBeforeExit);
+  process.on("exit", onExit);
+  for (const signal of signalNames) {
+    const handler = () => {
+      writeProgress({ status: "failed", note: `received ${signal}` });
+      logger.warn(`Received ${signal}; sync process is being interrupted.`);
+    };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
 
   try {
     ensureDir(paths.normalizedDir);
@@ -670,6 +774,17 @@ export async function runSync(
       skippedAttachments: 0,
       removedAttachments: 0,
     };
+
+    writeProgress({
+      status: "running",
+      processedAttachments: 0,
+      readyAttachments: 0,
+      errorAttachments: 0,
+      missingAttachments: 0,
+      unsupportedAttachments: 0,
+      skippedAttachments: 0,
+      note: "catalog loaded",
+    });
 
     for (const attachment of catalogData.attachments) {
       staleDocKeys.delete(attachment.docKey);
@@ -751,7 +866,7 @@ export async function runSync(
 
     if (changedAttachments.length > 0) {
       logger.info(`Preparing to extract ${changedAttachments.length} changed PDF(s).`, { console: true });
-      requireJava();
+      requireJavaFn();
     } else {
       logger.info("No PDF extraction needed; reusing existing indexed files where possible.", { console: true });
     }
@@ -812,6 +927,23 @@ export async function runSync(
     const batches = groupForOdlBatches(changedAttachments);
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
       const batch = batches[batchIndex]!;
+      writeProgress({
+        status: "running",
+        batchIndex: batchIndex + 1,
+        batchCount: batches.length,
+        currentFilePath: batch[0]?.filePath,
+        processedAttachments:
+          stats.readyAttachments +
+          stats.errorAttachments +
+          stats.missingAttachments +
+          stats.unsupportedAttachments,
+        readyAttachments: stats.readyAttachments,
+        errorAttachments: stats.errorAttachments,
+        missingAttachments: stats.missingAttachments,
+        unsupportedAttachments: stats.unsupportedAttachments,
+        skippedAttachments: stats.skippedAttachments,
+        note: `starting batch with ${batch.length} pdf(s)`,
+      });
       logger.info(`Extracting batch ${batchIndex + 1}/${batches.length} (${batch.length} PDF(s)).`, {
         console: true,
       });
@@ -833,6 +965,23 @@ export async function runSync(
           );
           for (const attachment of batch) {
             try {
+              writeProgress({
+                status: "running",
+                batchIndex: batchIndex + 1,
+                batchCount: batches.length,
+                currentFilePath: attachment.filePath,
+                processedAttachments:
+                  stats.readyAttachments +
+                  stats.errorAttachments +
+                  stats.missingAttachments +
+                  stats.unsupportedAttachments,
+                readyAttachments: stats.readyAttachments,
+                errorAttachments: stats.errorAttachments,
+                missingAttachments: stats.missingAttachments,
+                unsupportedAttachments: stats.unsupportedAttachments,
+                skippedAttachments: stats.skippedAttachments,
+                note: "retrying individually after batch failure",
+              });
               logger.info(`Retrying ${compactHomePath(attachment.filePath)} individually.`);
               const extracted = await extractBatchFn(
                 [attachment],
@@ -847,13 +996,80 @@ export async function runSync(
               await recordReadyAttachment(attachment, written);
             } catch (singleError) {
               recordErroredAttachment(attachment, singleError);
+              writeProgress({
+                status: "running",
+                batchIndex: batchIndex + 1,
+                batchCount: batches.length,
+                currentFilePath: attachment.filePath,
+                processedAttachments:
+                  stats.readyAttachments +
+                  stats.errorAttachments +
+                  stats.missingAttachments +
+                  stats.unsupportedAttachments,
+                readyAttachments: stats.readyAttachments,
+                errorAttachments: stats.errorAttachments,
+                missingAttachments: stats.missingAttachments,
+                unsupportedAttachments: stats.unsupportedAttachments,
+                skippedAttachments: stats.skippedAttachments,
+                note: `errored: ${summarizeSyncError(singleError)}`,
+              });
             }
           }
+          writeProgress({
+            status: "running",
+            batchIndex: batchIndex + 1,
+            batchCount: batches.length,
+            processedAttachments:
+              stats.readyAttachments +
+              stats.errorAttachments +
+              stats.missingAttachments +
+              stats.unsupportedAttachments,
+            readyAttachments: stats.readyAttachments,
+            errorAttachments: stats.errorAttachments,
+            missingAttachments: stats.missingAttachments,
+            unsupportedAttachments: stats.unsupportedAttachments,
+            skippedAttachments: stats.skippedAttachments,
+            note: "finished individual retries",
+          });
+          writeProgressCatalog(paths.catalogPath, nextEntries);
           continue;
         }
 
         recordErroredAttachment(batch[0]!, batchError);
+        writeProgress({
+          status: "running",
+          batchIndex: batchIndex + 1,
+          batchCount: batches.length,
+          currentFilePath: batch[0]?.filePath,
+          processedAttachments:
+            stats.readyAttachments +
+            stats.errorAttachments +
+            stats.missingAttachments +
+            stats.unsupportedAttachments,
+          readyAttachments: stats.readyAttachments,
+          errorAttachments: stats.errorAttachments,
+          missingAttachments: stats.missingAttachments,
+          unsupportedAttachments: stats.unsupportedAttachments,
+          skippedAttachments: stats.skippedAttachments,
+          note: `batch failed on single file: ${summarizeSyncError(batchError)}`,
+        });
       }
+      writeProgress({
+        status: "running",
+        batchIndex: batchIndex + 1,
+        batchCount: batches.length,
+        processedAttachments:
+          stats.readyAttachments +
+          stats.errorAttachments +
+          stats.missingAttachments +
+          stats.unsupportedAttachments,
+        readyAttachments: stats.readyAttachments,
+        errorAttachments: stats.errorAttachments,
+        missingAttachments: stats.missingAttachments,
+        unsupportedAttachments: stats.unsupportedAttachments,
+        skippedAttachments: stats.skippedAttachments,
+        note: "batch finished",
+      });
       writeProgressCatalog(paths.catalogPath, nextEntries);
     }
 
@@ -899,13 +1115,30 @@ export async function runSync(
     stats.missingAttachments = finalCounts.missingAttachments;
     stats.unsupportedAttachments = finalCounts.unsupportedAttachments;
     stats.errorAttachments = finalCounts.errorAttachments;
+    writeProgress({
+      status: "completed",
+      processedAttachments:
+        stats.readyAttachments +
+        stats.errorAttachments +
+        stats.missingAttachments +
+        stats.unsupportedAttachments,
+      readyAttachments: stats.readyAttachments,
+      errorAttachments: stats.errorAttachments,
+      missingAttachments: stats.missingAttachments,
+      unsupportedAttachments: stats.unsupportedAttachments,
+      skippedAttachments: stats.skippedAttachments,
+      note: "sync completed successfully",
+    });
     logger.info(`Sync finished. Log saved to ${compactHomePath(logger.logPath)}.`, { console: true });
-    logger.finalize("ok", fileOutcomes, stats);
+    finalizeOnce("ok", fileOutcomes, stats);
+    removeLifecycleHooks();
 
     return { stats, config, logPath: logger.logPath };
   } catch (error) {
+    writeProgress({ status: "failed", note: summarizeSyncError(error) });
     logger.error(`Sync aborted: ${summarizeSyncError(error)}`);
-    logger.finalize("failed", []);
+    finalizeOnce("failed", []);
+    removeLifecycleHooks();
     throw error;
   }
 }
